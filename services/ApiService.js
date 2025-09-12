@@ -1306,8 +1306,10 @@ export default class ApiService {
       // Use the correct API endpoint for borrow requests
       const params = new URLSearchParams();
       if (status && status !== 'all') {
-        params.append('status', status);
+        params.append('status', String(status).toUpperCase());
       }
+      // Ensure results are scoped to the current user
+      params.append('userId', userId);
 
       const url = `${this.API_BASE}/api/borrow-requests?${params.toString()}`;
       
@@ -1315,22 +1317,28 @@ export default class ApiService {
         method: 'GET'
       });
 
-      // Transform the response to match expected format
+      // Transform and filter response to current user + pending
       if (response && Array.isArray(response)) {
-        return {
-          success: true,
-          data: {
-            requests: response.map(request => ({
-              id: request.id,
-              bookId: request.bookId,
-              copyId: request.copyId, // Use copyId if available
-              userId: request.userId,
-              status: request.status,
-              dateRequested: request.dateRequested,
-              book: request.book
-            }))
-          }
-        };
+        const rows = response
+          .filter(r => String(r.userId) === String(userId))
+          .map(request => ({
+            id: request.id,
+            bookId: request.bookId,
+            copyId: request.copyId,
+            userId: request.userId,
+            status: String(request.status || '').toUpperCase(),
+            dateRequested: request.dateRequested,
+            book: request.book
+          }));
+        return { success: true, data: { requests: rows } };
+      }
+
+      // If response is object with data array, normalize and filter as well
+      if (response && Array.isArray(response.data)) {
+        const rows = response.data
+          .filter(r => String(r.userId) === String(userId))
+          .map(r => ({ ...r, status: String(r.status || '').toUpperCase() }));
+        return { success: true, data: { requests: rows } };
       }
 
       return response;

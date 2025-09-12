@@ -469,9 +469,9 @@ const MyBooks = () => {
       <View style={styles.bookCard}>
         <View style={styles.bookHeader}>
           <View style={styles.bookTitleContainer}>
-            <Text style={styles.bookTitle} numberOfLines={2}>
-              {item.bookTitle}
-            </Text>
+          <Text style={styles.bookTitle} numberOfLines={2}>
+            {item.bookTitle}
+          </Text>
             <Text style={styles.bookAuthor}>by {item.bookAuthor}</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item) }]}>
@@ -484,13 +484,13 @@ const MyBooks = () => {
             <MaterialCommunityIcons name="calendar" size={16} color="#6b7280" />
             <Text style={styles.bookDetailText}>
               Borrowed: {new Date(item.borrowDate).toLocaleDateString()}
-            </Text>
+          </Text>
           </View>
           <View style={styles.bookDetailItem}>
             <MaterialCommunityIcons name="book-open-variant" size={16} color="#6b7280" />
             <Text style={styles.bookDetailText}>
               Due: {new Date((pendingRenewals[item.bookId] || (item.book && item.book.id && pendingRenewals[item.book.id]) || item.dueDate)).toLocaleDateString()}
-            </Text>
+          </Text>
           </View>
           {item.copyNumber && (
             <View style={styles.bookDetailItem}>
@@ -501,29 +501,29 @@ const MyBooks = () => {
         </View>
 
         {/* Enhanced Status Indicators */}
-        {pendingRenewals[item.bookId || (item.book && item.book.id)] && (
+          {pendingRenewals[item.bookId || (item.book && item.book.id)] && (
           <View style={styles.pendingRenewalBanner}>
             <MaterialCommunityIcons name="clock-outline" size={16} color="#8b5cf6" />
             <Text style={styles.pendingRenewalText}>Renewal request pending approval</Text>
           </View>
-        )}
+          )}
 
-        {item.status === 'overdue' && (
+          {item.status === 'overdue' && (
           <View style={styles.overdueBanner}>
             <MaterialCommunityIcons name="alert-circle" size={16} color="#dc2626" />
             <Text style={styles.overdueText}>
               {Math.abs(getDaysRemaining(item.dueDate))} days overdue
             </Text>
           </View>
-        )}
+          )}
 
-        {item.fineAmount > 0 && (
+          {item.fineAmount > 0 && (
           <View style={styles.fineBanner}>
             <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
             <Text style={styles.fineText}>
               Fine: ${item.fineAmount.toFixed(2)} ({item.fineStatus})
             </Text>
-          </View>
+        </View>
         )}
         
         {/* Enhanced Report Status Banner */}

@@ -72,7 +72,10 @@ const DashboardScreen = () => {
           const bookRequestsResponse = await ApiService.getBookRequests();
           if (bookRequestsResponse.success && bookRequestsResponse.data) {
             const bookRequests = Array.isArray(bookRequestsResponse.data) ? bookRequestsResponse.data : bookRequestsResponse.data.requests || [];
-            pendingBookCount = bookRequests.filter(request => request.status === 'PENDING').length;
+            pendingBookCount = bookRequests.filter(request => {
+              const s = String(request.status || '').toUpperCase();
+              return s === 'PENDING' || s === 'UNDER_REVIEW';
+            }).length;
           }
         } catch (error) {
           console.log('Book requests not available for this user role');

@@ -190,7 +190,7 @@ const Header = ({ title, subtitle, onMenuPress, showMenuButton = true, showBackB
                   ? { uri: profileImageUrl } 
                   : require('../assets/profile-placeholder.png')
               } 
-              style={styles.profileImage}
+              style={styles.profileImage} 
               onError={() => {
                 console.log('Header: Profile image failed to load, using placeholder');
                 setProfileImageUrl(null);

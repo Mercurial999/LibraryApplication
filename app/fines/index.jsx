@@ -123,8 +123,8 @@ const FinesScreen = () => {
               <View style={styles.summaryContent}>
                 <Text style={styles.totalAmount}>₱{finesData.totalOutstanding.toFixed(2)}</Text>
                 <Text style={styles.summarySubtext}>
-                  {finesData.unpaidCount} {finesData.unpaidCount === 1 ? 'fine' : 'fines'} unpaid
-                </Text>
+                {finesData.unpaidCount} {finesData.unpaidCount === 1 ? 'fine' : 'fines'} unpaid
+              </Text>
               </View>
             </View>
 
@@ -149,10 +149,10 @@ const FinesScreen = () => {
 
             {/* Action Cards */}
             <View style={styles.actionsSection}>
-              <TouchableOpacity 
+            <TouchableOpacity 
                 style={styles.actionCard} 
-                onPress={() => router.push('/fines/outstanding')}
-              >
+              onPress={() => router.push('/fines/outstanding')}
+            >
                 <View style={styles.actionContent}>
                   <MaterialCommunityIcons name="file-document-outline" size={24} color="#3b82f6" />
                   <View style={styles.actionText}>
@@ -161,12 +161,12 @@ const FinesScreen = () => {
                   </View>
                 </View>
                 <MaterialCommunityIcons name="chevron-right" size={24} color="#94a3b8" />
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
                 style={styles.actionCard} 
-                onPress={() => router.push('/fines/payment-history')}
-              >
+              onPress={() => router.push('/fines/payment-history')}
+            >
                 <View style={styles.actionContent}>
                   <MaterialCommunityIcons name="chart-line" size={24} color="#3b82f6" />
                   <View style={styles.actionText}>
@@ -175,8 +175,8 @@ const FinesScreen = () => {
                   </View>
                 </View>
                 <MaterialCommunityIcons name="chevron-right" size={24} color="#94a3b8" />
-              </TouchableOpacity>
-              
+            </TouchableOpacity>
+            
               <TouchableOpacity style={styles.actionCard} onPress={handleDisputeFine}>
                 <View style={styles.actionContent}>
                   <MaterialCommunityIcons name="alert-circle-outline" size={24} color="#d97706" />
@@ -186,7 +186,7 @@ const FinesScreen = () => {
                   </View>
                 </View>
                 <MaterialCommunityIcons name="chevron-right" size={24} color="#94a3b8" />
-              </TouchableOpacity>
+            </TouchableOpacity>
             </View>
 
             {/* Overdue Transactions Section */}
@@ -210,11 +210,11 @@ const FinesScreen = () => {
                       <View style={styles.bookHeader}>
                         <View style={styles.bookInfo}>
                           <Text style={styles.bookTitle} numberOfLines={2}>
-                            {transaction.book?.title || 'Unknown Book'}
-                          </Text>
-                          <Text style={styles.bookAuthor}>
-                            by {transaction.book?.author || 'Unknown Author'}
-                          </Text>
+                        {transaction.book?.title || 'Unknown Book'}
+                      </Text>
+                      <Text style={styles.bookAuthor}>
+                        by {transaction.book?.author || 'Unknown Author'}
+                      </Text>
                         </View>
                         <View style={[styles.statusBadge, { backgroundColor: '#dc2626' }]}>
                           <Text style={styles.statusText}>Overdue</Text>
@@ -225,21 +225,21 @@ const FinesScreen = () => {
                         <View style={styles.detailItem}>
                           <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
                           <Text style={styles.detailText}>
-                            Due: {dueDate.toLocaleDateString()}
-                          </Text>
+                          Due: {dueDate.toLocaleDateString()}
+                        </Text>
                         </View>
                         <View style={styles.detailItem}>
                           <MaterialCommunityIcons name="clock-alert" size={16} color="#dc2626" />
                           <Text style={[styles.detailText, { color: '#dc2626' }]}>
-                            {daysOverdue > 0 ? `${daysOverdue} day${daysOverdue > 1 ? 's' : ''} overdue` : 'Within grace period'}
-                          </Text>
+                          {daysOverdue > 0 ? `${daysOverdue} day${daysOverdue > 1 ? 's' : ''} overdue` : 'Within grace period'}
+                        </Text>
                         </View>
                         {daysOverdue > 0 && (
                           <View style={styles.detailItem}>
                             <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
                             <Text style={[styles.detailText, { color: '#dc2626' }]}>
-                              Fine: ₱{fineAmount.toFixed(2)}
-                            </Text>
+                            Fine: ₱{fineAmount.toFixed(2)}
+                          </Text>
                           </View>
                         )}
                       </View>
@@ -320,7 +320,7 @@ const styles = StyleSheet.create({
 
   // Summary Card
   summaryCard: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#ffffff', 
     borderRadius: 16,
     padding: 20,
     marginBottom: 16,
@@ -353,7 +353,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   summarySubtext: {
-    fontSize: 14,
+    fontSize: 14, 
     color: '#64748b',
     fontWeight: '500',
   },
