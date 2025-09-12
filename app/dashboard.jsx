@@ -298,7 +298,7 @@ const DashboardScreen = () => {
                 </TouchableOpacity>
                 
                 {userData?.role === 'TEACHER' && (
-                  <TouchableOpacity style={styles.statCard} onPress={() => router.push('/borrowing/my-requests')}>
+                  <TouchableOpacity style={styles.statCard} onPress={() => router.push('/teacher-requests')}>
                     <View style={styles.statIconContainer}>
                       <MaterialCommunityIcons name="book-open-variant" size={22} color="#1e293b" />
                     </View>
