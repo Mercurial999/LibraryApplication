@@ -5,6 +5,7 @@ import {
     ActivityIndicator,
     Alert,
     Dimensions,
+    Image,
     KeyboardAvoidingView,
     Platform,
     ScrollView,
@@ -65,24 +66,22 @@ const LoginScreen = () => {
       >
         {/* Header Section */}
         <View style={styles.headerSection}>
-          <View style={styles.logoContainer}>
-            <Text style={styles.logoIcon}>📚</Text>
-            <Text style={styles.logoText}>KCMI</Text>
-          </View>
-          <Text style={styles.title}>Library Management System</Text>
-          <Text style={styles.subtitle}>Access your library account</Text>
+          <Image
+            source={require('../../assets/images/kcmi-logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
+          <Text style={styles.title}>KCMI LIBRARY</Text>
         </View>
 
         {/* Login Form Section */}
         <View style={styles.formSection}>
-          <Text style={styles.formTitle}>Welcome Back</Text>
-          <Text style={styles.formSubtitle}>Sign in to continue</Text>
+          <Text style={styles.formTitle}>Sign in</Text>
           
           {/* Username Input */}
           <View style={styles.inputContainer}>
             <Text style={styles.inputLabel}>Username</Text>
             <View style={styles.inputWrapper}>
-              <Text style={styles.inputIcon}>👤</Text>
       <TextInput
                 placeholder="Enter your username"
                 value={username}
@@ -99,7 +98,6 @@ const LoginScreen = () => {
           <View style={styles.inputContainer}>
             <Text style={styles.inputLabel}>Password</Text>
             <View style={styles.inputWrapper}>
-              <Text style={styles.inputIcon}>🔒</Text>
       <TextInput
                 placeholder="Enter your password"
         value={password}
@@ -142,11 +140,7 @@ const LoginScreen = () => {
       </TouchableOpacity>
 
           {/* Divider */}
-          <View style={styles.dividerContainer}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or</Text>
-            <View style={styles.dividerLine} />
-          </View>
+          <View style={styles.dividerContainer} />
 
           {/* Register Link */}
           <View style={styles.registerContainer}>
@@ -159,8 +153,7 @@ const LoginScreen = () => {
 
         {/* Footer Section */}
         <View style={styles.footerSection}>
-          <Text style={styles.footerText}>© 2024 KCMI Library System</Text>
-          <Text style={styles.footerSubtext}>Powered by modern technology</Text>
+          <Text style={styles.footerText}>© 2024 KCMI Library</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -180,63 +173,41 @@ const styles = StyleSheet.create({
   // Header Section
   headerSection: {
     alignItems: 'center',
-    paddingTop: height * 0.1,
-    paddingBottom: 40,
+    paddingTop: height * 0.12,
+    paddingBottom: 24,
     paddingHorizontal: 20
   },
-  logoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20
-  },
-  logoIcon: {
-    fontSize: 48,
-    marginRight: 12
-  },
-  logoText: {
-    fontSize: 36,
-    fontWeight: '800',
-    color: '#1e293b',
-    letterSpacing: 2
+  logoImage: {
+    width: 80,
+    height: 80,
+    marginBottom: 12
   },
   title: { 
-    fontSize: 24, 
+    fontSize: 20, 
     fontWeight: '700', 
     color: '#1e293b',
-    marginBottom: 8,
+    marginBottom: 0,
     textAlign: 'center'
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#64748b',
-    textAlign: 'center'
-  },
+  subtitle: { fontSize: 0 },
 
   // Form Section
   formSection: {
     backgroundColor: '#ffffff',
     marginHorizontal: 20,
-    padding: 24,
-    borderRadius: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5
+    padding: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb'
   },
   formTitle: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '700',
     color: '#1e293b',
-    marginBottom: 8,
+    marginBottom: 16,
     textAlign: 'center'
   },
-  formSubtitle: {
-    fontSize: 16,
-    color: '#64748b',
-    marginBottom: 32,
-    textAlign: 'center'
-  },
+  formSubtitle: { fontSize: 0 },
 
   // Input Container
   inputContainer: {
@@ -251,23 +222,18 @@ const styles = StyleSheet.create({
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: '#e5e7eb',
-    borderRadius: 12,
+    borderRadius: 8,
     backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingVertical: 4
-  },
-  inputIcon: {
-    fontSize: 20,
-    marginRight: 12,
-    color: '#6b7280'
+    paddingHorizontal: 12,
+    paddingVertical: 2
   },
   input: { 
     flex: 1,
     fontSize: 16,
     color: '#1f2937',
-    paddingVertical: 16
+    paddingVertical: 12
   },
   eyeIcon: {
     padding: 8
@@ -290,31 +256,22 @@ const styles = StyleSheet.create({
   // Login Button
   loginButton: { 
     backgroundColor: '#3b82f6',
-    paddingVertical: 18,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 8,
     alignItems: 'center',
-    marginBottom: 24,
-    shadowColor: '#3b82f6',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4
+    marginBottom: 16
   },
   loginButtonDisabled: {
     backgroundColor: '#9ca3af'
   },
   loginButtonText: { 
     color: '#ffffff', 
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700'
   },
 
   // Divider
-  dividerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24
-  },
+  dividerContainer: { height: 8 },
   dividerLine: {
     flex: 1,
     height: 1,
@@ -345,7 +302,7 @@ const styles = StyleSheet.create({
   // Footer
   footerSection: {
     alignItems: 'center',
-    marginTop: 40,
+    marginTop: 20,
     paddingHorizontal: 20
   },
   footerText: {
@@ -353,10 +310,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: 4
   },
-  footerSubtext: {
-    color: '#d1d5db',
-    fontSize: 12
-  }
+  footerSubtext: { fontSize: 0 }
 });
 
 export default LoginScreen;

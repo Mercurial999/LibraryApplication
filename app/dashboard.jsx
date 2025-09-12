@@ -1,8 +1,11 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Dimensions, Image, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Dimensions, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Header from '../components/Header';
+import Sidebar from '../components/Sidebar';
 import ApiService from '../services/ApiService';
+import { getFallbackRecommendations, getIntelligentRecommendations } from '../services/RecoService';
 
 const { width } = Dimensions.get('window');
 
@@ -14,13 +17,77 @@ const DashboardScreen = () => {
   const [stats, setStats] = useState({
     borrowedCount: 0,
     overdueCount: 0,
-    pendingRequestsCount: 0,
+    pendingBorrowRequestsCount: 0,
+    pendingBookRequestsCount: 0,
     recommendationsCount: 0
   });
   const [recentActivity, setRecentActivity] = useState([]);
+  const [borrowingHistory, setBorrowingHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState(null);
   const router = useRouter();
-  const slideAnim = useRef(new Animated.Value(-280)).current;
+
+  // Load borrowing history
+  const loadBorrowingHistory = async () => {
+    try {
+      setHistoryLoading(true);
+      const currentUser = await ApiService.getCurrentUser();
+      if (!currentUser) return;
+
+      // Get comprehensive borrowing history
+      const response = await ApiService.getUserBooks(currentUser.id, { status: 'all', includeHistory: true });
+      if (response.success && response.data) {
+        const allBooks = [
+          ...(response.data.borrowedBooks || []),
+          ...(response.data.returnedBooks || []),
+          ...(response.data.overdueBooks || [])
+        ];
+
+        // Sort by borrow date (most recent first)
+        const sortedHistory = allBooks.sort((a, b) => new Date(b.borrowDate) - new Date(a.borrowDate));
+        setBorrowingHistory(sortedHistory);
+      }
+    } catch (error) {
+      console.error('Error loading borrowing history:', error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  // Load request counts
+  const loadRequestCounts = async () => {
+    try {
+      // Load borrow requests count
+      const borrowRequestsResponse = await ApiService.getBorrowRequests('pending');
+      let pendingBorrowCount = 0;
+      if (borrowRequestsResponse.success && borrowRequestsResponse.data && borrowRequestsResponse.data.requests) {
+        pendingBorrowCount = borrowRequestsResponse.data.requests.length;
+      }
+
+      // Load book requests count (for teachers only)
+      let pendingBookCount = 0;
+      if (userData?.role === 'TEACHER') {
+        try {
+          const bookRequestsResponse = await ApiService.getBookRequests();
+          if (bookRequestsResponse.success && bookRequestsResponse.data) {
+            const bookRequests = Array.isArray(bookRequestsResponse.data) ? bookRequestsResponse.data : bookRequestsResponse.data.requests || [];
+            pendingBookCount = bookRequests.filter(request => request.status === 'PENDING').length;
+          }
+        } catch (error) {
+          console.log('Book requests not available for this user role');
+        }
+      }
+
+      setStats(prev => ({
+        ...prev,
+        pendingBorrowRequestsCount: pendingBorrowCount,
+        pendingBookRequestsCount: pendingBookCount
+      }));
+    } catch (error) {
+      console.error('Error loading request counts:', error);
+    }
+  };
 
   // Load dashboard data
   const loadDashboardData = async () => {
@@ -41,10 +108,35 @@ const DashboardScreen = () => {
         setStats({
           borrowedCount: statsResponse.data.borrowedCount || 0,
           overdueCount: statsResponse.data.overdueCount || 0,
-          pendingRequestsCount: statsResponse.data.pendingRequestsCount || 0,
+          pendingBorrowRequestsCount: statsResponse.data.pendingBorrowRequestsCount || 0,
+          pendingBookRequestsCount: statsResponse.data.pendingBookRequestsCount || 0,
           recommendationsCount: statsResponse.data.recommendationsCount || 0
         });
       }
+      // Load recommendations using intelligent API first, then fallback
+      try {
+        let count = 0;
+        try {
+          const intelligent = await getIntelligentRecommendations();
+          if (Array.isArray(intelligent)) {
+            count = intelligent.length;
+          } else if (intelligent && Array.isArray(intelligent.recommendations)) {
+            count = intelligent.recommendations.length;
+          }
+        } catch {
+          // fallback
+          const recoResult = await getFallbackRecommendations();
+          const recos = Array.isArray(recoResult?.recommendations) ? recoResult.recommendations : [];
+          count = recos.length;
+        }
+        setStats(prev => ({ ...prev, recommendationsCount: count }));
+      } catch (e) {
+        // ignore reco errors in dashboard
+      }
+
+
+      // Load additional request counts
+      await loadRequestCounts();
 
       // Get recent activity using new mobile API
       const activityResponse = await ApiService.getRecentActivity(null, 5);
@@ -52,7 +144,8 @@ const DashboardScreen = () => {
         setRecentActivity(activityResponse.data.activities);
       } else {
         // Fallback: get user books and create activity from that
-        const userBooksResponse = await ApiService.getUserBooks(null, 'all', true);
+        const current = currentUser || await ApiService.getCurrentUser();
+        const userBooksResponse = await ApiService.getUserBooks(current?.id, { status: 'all', includeHistory: true });
         if (userBooksResponse.success && userBooksResponse.data) {
           const activities = [];
           
@@ -117,30 +210,15 @@ const DashboardScreen = () => {
     loadDashboardData();
   }, []);
 
-  useEffect(() => {
-    if (menuVisible) {
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(slideAnim, {
-        toValue: -280,
-        duration: 300,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [menuVisible, slideAnim]);
 
   const getActivityIcon = (type) => {
     switch (type) {
-      case 'borrowed': return '📚';
-      case 'returned': return '✅';
-      case 'overdue': return '⏰';
-      case 'requested': return '📋';
-      case 'renewed': return '🔄';
-      default: return '📖';
+      case 'borrowed': return 'book-outline';
+      case 'returned': return 'check-circle-outline';
+      case 'overdue': return 'bell-alert-outline';
+      case 'requested': return 'clipboard-text-outline';
+      case 'renewed': return 'autorenew';
+      default: return 'book-open-variant';
     }
   };
 
@@ -154,19 +232,6 @@ const DashboardScreen = () => {
     }
   };
 
-const menuItems = [
-  { label: 'Dashboard', route: '/dashboard', icon: '🏠' },
-  { label: 'Book Catalog', route: '/book-catalog', icon: '📚' },
-  { label: 'My Books', route: '/borrowing/my-books', icon: '📖' },
-  { label: 'Book Reservation', route: '/borrowing/reserve', icon: '🔖' },
-  { label: 'Overdue Fines', route: '/fines', icon: '💰' },
-  { label: 'Recommendations', route: '/recommendations', icon: '⭐' },
-  { label: 'Reports', route: '/reports', icon: '📊' },
-  { label: 'Teacher Requests', route: '/teacher-requests', icon: '👨‍🏫' },
-  { label: 'Notifications', route: '/notifications', icon: '🔔' },
-  { label: 'Account', route: '/account', icon: '👤' },
-  { label: 'Logout', route: '/login', icon: '🚪' },
-];
 
   return (
     <View style={styles.container}>
@@ -177,60 +242,12 @@ const menuItems = [
         onMenuPress={() => setMenuVisible(true)}
       />
 
-      {/* Enhanced Sidebar Menu */}
-      <Modal
-        visible={menuVisible}
-        animationType="none"
-        transparent
-        onRequestClose={() => setMenuVisible(false)}
-      >
-        <View style={styles.overlay}>
-          <Animated.View style={[styles.menu, { transform: [{ translateX: slideAnim }] }]}>
-            <View style={styles.menuHeader}>
-              <Image 
-                source={require('../assets/profile-placeholder.png')} 
-                style={styles.menuProfileImage} 
-              />
-              <View style={styles.menuUserInfo}>
-                <Text style={styles.menuUserName}>
-                  {userData?.fullName || userData?.firstName || 'User Name'}
-                </Text>
-                <Text style={styles.menuUserId}>
-                  ID: {userData?.id || '000000'}
-                </Text>
-                <Text style={styles.menuUserRole}>
-                  {userData?.role || 'Student'}
-                </Text>
-              </View>
-              <TouchableOpacity 
-                style={styles.menuCloseButton}
-                onPress={() => setMenuVisible(false)}
-              >
-                <Text style={styles.menuCloseIcon}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.menuHint}>
-              <Text style={styles.menuHintText}>💡 Tap menu items to navigate</Text>
-            </View>
-            <ScrollView style={styles.menuScroll} showsVerticalScrollIndicator={false}>
-              {menuItems.map((item, index) => (
-              <TouchableOpacity
-                key={item.label}
-                style={styles.menuItem}
-                onPress={() => {
-                  // Don't close the sidebar - keep it open for faster navigation
-                  router.push(item.route);
-                }}
-              >
-                  <Text style={styles.menuItemIcon}>{item.icon}</Text>
-                <Text style={styles.menuItemText}>{item.label}</Text>
-              </TouchableOpacity>
-            ))}
-            </ScrollView>
-          </Animated.View>
-          <Pressable style={styles.overlayPressable} onPress={() => setMenuVisible(false)} />
-          </View>
-      </Modal>
+      {/* Sidebar Menu */}
+      <Sidebar 
+        visible={menuVisible} 
+        onClose={() => setMenuVisible(false)} 
+        currentRoute="/dashboard"
+      />
 
       {/* Enhanced Main Content */}
       <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}
@@ -258,15 +275,15 @@ const menuItems = [
               <View style={styles.statsGrid}>
                 <TouchableOpacity style={styles.statCard} onPress={() => router.push('/borrowing/my-books')}>
                   <View style={styles.statIconContainer}>
-                    <Text style={styles.statIcon}>📚</Text>
+                    <MaterialCommunityIcons name="book-outline" size={22} color="#1e293b" />
                   </View>
                   <Text style={styles.statValue}>{stats.borrowedCount}</Text>
                   <Text style={styles.statLabel}>Books Borrowed</Text>
                 </TouchableOpacity>
                 
-                <TouchableOpacity style={styles.statCard} onPress={() => router.push('/fines')}>
+                <TouchableOpacity style={styles.statCard} onPress={() => router.push('/overdue-fines')}>
                   <View style={styles.statIconContainer}>
-                    <Text style={styles.statIcon}>⚠️</Text>
+                    <MaterialCommunityIcons name="alert-circle-outline" size={22} color="#1e293b" />
                   </View>
                   <Text style={styles.statValue}>{stats.overdueCount}</Text>
                   <Text style={styles.statLabel}>Overdue</Text>
@@ -274,15 +291,25 @@ const menuItems = [
                 
                 <TouchableOpacity style={styles.statCard} onPress={() => router.push('/borrowing/my-requests')}>
                   <View style={styles.statIconContainer}>
-                    <Text style={styles.statIcon}>📋</Text>
+                    <MaterialCommunityIcons name="clipboard-text-outline" size={22} color="#1e293b" />
                   </View>
-                  <Text style={styles.statValue}>{stats.pendingRequestsCount}</Text>
-                  <Text style={styles.statLabel}>Pending Requests</Text>
+                  <Text style={styles.statValue}>{stats.pendingBorrowRequestsCount}</Text>
+                  <Text style={styles.statLabel}>Borrow Requests</Text>
                 </TouchableOpacity>
+                
+                {userData?.role === 'TEACHER' && (
+                  <TouchableOpacity style={styles.statCard} onPress={() => router.push('/borrowing/my-requests')}>
+                    <View style={styles.statIconContainer}>
+                      <MaterialCommunityIcons name="book-open-variant" size={22} color="#1e293b" />
+                    </View>
+                    <Text style={styles.statValue}>{stats.pendingBookRequestsCount}</Text>
+                    <Text style={styles.statLabel}>Book Requests</Text>
+                  </TouchableOpacity>
+                )}
                 
                 <TouchableOpacity style={styles.statCard} onPress={() => router.push('/recommendations')}>
                   <View style={styles.statIconContainer}>
-                    <Text style={styles.statIcon}>⭐</Text>
+                    <MaterialCommunityIcons name="star-outline" size={22} color="#1e293b" />
                   </View>
                   <Text style={styles.statValue}>{stats.recommendationsCount}</Text>
                   <Text style={styles.statLabel}>Recommendations</Text>
@@ -298,7 +325,7 @@ const menuItems = [
                   style={styles.actionButton} 
                   onPress={() => router.push('/book-catalog')}
                 >
-                  <Text style={styles.actionButtonIcon}>🔍</Text>
+                  <MaterialCommunityIcons name="magnify" size={24} color="#ffffff" />
                   <Text style={styles.actionButtonText}>Browse Books</Text>
                 </TouchableOpacity>
               </View>
@@ -310,39 +337,122 @@ const menuItems = [
                 <Text style={styles.sectionTitle}>Recent Activity</Text>
                 <TouchableOpacity onPress={() => router.push('/borrowing/my-books')}>
                   <Text style={styles.viewAllText}>View All</Text>
-        </TouchableOpacity>
-      </View>
+                </TouchableOpacity>
+              </View>
               
-           {recentActivity.length > 0 ? (
-             recentActivity.map((activity, index) => (
-               <View key={activity.id || index} style={styles.activityCard}>
-                 <View style={styles.activityIconContainer}>
-                   <Text style={styles.activityIcon}>
-                     {activity.icon || getActivityIcon(activity.type)}
-                   </Text>
-      </View>
-                 <View style={styles.activityContent}>
-                   <Text style={styles.activityTitle}>{activity.title}</Text>
-                   <Text style={styles.activitySubtitle}>{activity.subtitle}</Text>
-                   <Text style={[
-                     styles.activityStatus,
-                     { 
-                       color: getActivityStatusColor(activity.status),
-                       backgroundColor: `${getActivityStatusColor(activity.status)}20`
-                     }
-                   ]}>
-                     {activity.status}
-                   </Text>
-      </View>
-               </View>
-             ))
-           ) : (
-             <View style={styles.emptyActivityContainer}>
-               <Text style={styles.emptyActivityText}>No recent activity</Text>
-               <Text style={styles.emptyActivitySubtext}>Your library activity will appear here</Text>
-             </View>
-           )}
-             </View>
+              {recentActivity.length > 0 ? (
+                recentActivity.map((activity, index) => (
+                  <View key={activity.id || index} style={styles.activityCard}>
+                    <View style={styles.activityIconContainer}>
+                      <MaterialCommunityIcons name={getActivityIcon(activity.type)} size={20} color="#1e293b" />
+                    </View>
+                    <View style={styles.activityContent}>
+                      <Text style={styles.activityTitle}>{activity.title}</Text>
+                      <Text style={styles.activitySubtitle}>{activity.subtitle}</Text>
+                      <Text style={[
+                        styles.activityStatus,
+                        { 
+                          color: getActivityStatusColor(activity.status),
+                          backgroundColor: `${getActivityStatusColor(activity.status)}20`
+                        }
+                      ]}>
+                        {activity.status}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.emptyActivityContainer}>
+                  <Text style={styles.emptyActivityText}>No recent activity</Text>
+                  <Text style={styles.emptyActivitySubtext}>Your library activity will appear here</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Borrowing History Section */}
+            <View style={styles.historySection}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Borrowing History</Text>
+                <TouchableOpacity onPress={() => setShowHistory(!showHistory)}>
+                  <Text style={styles.viewAllText}>
+                    {showHistory ? 'Hide' : 'View All'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              
+              {showHistory ? (
+                <View style={styles.historyContainer}>
+                  {historyLoading ? (
+                    <View style={styles.historyLoadingContainer}>
+                      <ActivityIndicator size="small" color="#3b82f6" />
+                      <Text style={styles.historyLoadingText}>Loading history...</Text>
+                    </View>
+                  ) : borrowingHistory.length > 0 ? (
+                    borrowingHistory.slice(0, 10).map((book, index) => (
+                      <View key={book.id || index} style={styles.historyCard}>
+                        <View style={styles.historyIconContainer}>
+                          <MaterialCommunityIcons 
+                            name={book.status === 'returned' ? 'check-circle' : book.status === 'overdue' ? 'alert-circle' : 'book'} 
+                            size={20} 
+                            color={book.status === 'returned' ? '#10b981' : book.status === 'overdue' ? '#ef4444' : '#3b82f6'} 
+                          />
+                        </View>
+                        <View style={styles.historyContent}>
+                          <Text style={styles.historyTitle} numberOfLines={1}>
+                            {book.bookTitle || book.title}
+                          </Text>
+                          <Text style={styles.historyAuthor} numberOfLines={1}>
+                            by {book.bookAuthor || book.author}
+                          </Text>
+                          <View style={styles.historyDetails}>
+                            <Text style={styles.historyDate}>
+                              Borrowed: {new Date(book.borrowDate).toLocaleDateString()}
+                            </Text>
+                            {book.returnDate && (
+                              <Text style={styles.historyDate}>
+                                Returned: {new Date(book.returnDate).toLocaleDateString()}
+                              </Text>
+                            )}
+                            <Text style={styles.historyDate}>
+                              Due: {new Date(book.dueDate).toLocaleDateString()}
+                            </Text>
+                          </View>
+                          <View style={[
+                            styles.historyStatus,
+                            { 
+                              backgroundColor: book.status === 'returned' ? '#10b981' : book.status === 'overdue' ? '#ef4444' : '#3b82f6'
+                            }
+                          ]}>
+                            <Text style={styles.historyStatusText}>
+                              {book.status === 'returned' ? 'Returned' : book.status === 'overdue' ? 'Overdue' : 'Borrowed'}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    ))
+                  ) : (
+                    <View style={styles.emptyHistoryContainer}>
+                      <Text style={styles.emptyHistoryText}>No borrowing history</Text>
+                      <Text style={styles.emptyHistorySubtext}>Your borrowing history will appear here</Text>
+                    </View>
+                  )}
+                </View>
+              ) : (
+                <TouchableOpacity 
+                  style={styles.historyToggleButton}
+                  onPress={() => {
+                    if (!showHistory) {
+                      loadBorrowingHistory();
+                    }
+                    setShowHistory(!showHistory);
+                  }}
+                >
+                  <MaterialCommunityIcons name="history" size={20} color="#3b82f6" />
+                  <Text style={styles.historyToggleText}>View Complete Borrowing History</Text>
+                  <MaterialCommunityIcons name="chevron-right" size={20} color="#3b82f6" />
+                </TouchableOpacity>
+              )}
+            </View>
           </>
         )}
       </ScrollView>
@@ -358,112 +468,6 @@ const styles = StyleSheet.create({
   
 
 
-  // Enhanced Sidebar
-  overlay: { 
-    flex: 1, 
-    flexDirection: 'row' 
-  },
-  overlayPressable: { 
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)'
-  },
-  menu: { 
-    width: 280, 
-    backgroundColor: '#1e293b', 
-    height: '100%',
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    zIndex: 1000,
-    shadowColor: '#000',
-    shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8
-  },
-  menuHeader: {
-    padding: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155',
-    alignItems: 'center'
-  },
-  menuProfileImage: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    marginBottom: 16
-  },
-  menuUserInfo: {
-    alignItems: 'center'
-  },
-  menuUserName: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 4
-  },
-  menuUserId: {
-    color: '#94a3b8',
-    fontSize: 14,
-    marginBottom: 2
-  },
-  menuUserRole: {
-    color: '#38bdf8',
-    fontSize: 12,
-    fontWeight: '500',
-    backgroundColor: 'rgba(56, 189, 248, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12
-  },
-  menuCloseButton: {
-    position: 'absolute',
-    top: 24,
-    right: 24,
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#334155'
-  },
-  menuCloseIcon: {
-    fontSize: 20,
-    color: '#ffffff'
-  },
-  menuHint: {
-    padding: 16,
-    alignItems: 'center',
-    backgroundColor: '#262626',
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155'
-  },
-  menuHintText: {
-    color: '#94a3b8',
-    fontSize: 12,
-    fontStyle: 'italic'
-  },
-  menuScroll: {
-    flex: 1,
-    paddingTop: 16
-  },
-  menuItem: { 
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#334155',
-    backgroundColor: 'transparent'
-  },
-  menuItemIcon: {
-    fontSize: 20,
-    marginRight: 16,
-    width: 24,
-    textAlign: 'center'
-  },
-  menuItemText: { 
-    color: '#e2e8f0', 
-    fontSize: 16,
-    fontWeight: '500'
-  },
 
   // Enhanced Main Content
   scrollContainer: {
@@ -508,9 +512,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12
-  },
-  statIcon: {
-    fontSize: 24
   },
   statValue: {
     fontSize: 28,
@@ -667,6 +668,113 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#94a3b8',
   },
+
+  // Borrowing History Section
+  historySection: {
+    marginBottom: 32
+  },
+  historyContainer: {
+    marginTop: 16
+  },
+  historyLoadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20
+  },
+  historyLoadingText: {
+    marginLeft: 8,
+    color: '#64748b',
+    fontSize: 14
+  },
+  historyCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  historyIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12
+  },
+  historyContent: {
+    flex: 1
+  },
+  historyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 2
+  },
+  historyAuthor: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 8
+  },
+  historyDetails: {
+    marginBottom: 8
+  },
+  historyDate: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 2
+  },
+  historyStatus: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    alignSelf: 'flex-start'
+  },
+  historyStatusText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  historyToggleButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  historyToggleText: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1e293b'
+  },
+  emptyHistoryContainer: {
+    alignItems: 'center',
+    paddingVertical: 20
+  },
+  emptyHistoryText: {
+    fontSize: 16,
+    color: '#64748b',
+    marginBottom: 4
+  },
+  emptyHistorySubtext: {
+    fontSize: 14,
+    color: '#94a3b8'
+  }
 });
 
 export default DashboardScreen;

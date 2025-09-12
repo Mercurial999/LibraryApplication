@@ -42,7 +42,8 @@ const BorrowScreen = () => {
         
         // If copyId is provided, find and set the selected copy
         if (copyId && response.data.copies) {
-          const copy = response.data.copies.find(c => c.id === copyId);
+          // Normalize id comparison to avoid string/number mismatches
+          const copy = response.data.copies.find(c => String(c.id) === String(copyId));
           if (copy) {
             setSelectedCopy(copy);
           } else {
@@ -70,13 +71,14 @@ const BorrowScreen = () => {
       return;
     }
     
-    // Check if selected copy is available
-    if (selectedCopy.status !== 'AVAILABLE') {
+    // Check if selected copy is available (normalize status casing)
+    const normalizedStatus = String(selectedCopy.status || '').toUpperCase();
+    if (normalizedStatus !== 'AVAILABLE') {
       Alert.alert('Copy Unavailable', 'The selected copy is not available for borrowing.');
       return;
     }
 
-    // Show condition assessment modal
+    // Show condition assessment modal in read-only mode to display backend condition
     setConditionModalVisible(true);
   };
 
@@ -98,6 +100,7 @@ const BorrowScreen = () => {
       expectedReturnDate.setDate(expectedReturnDate.getDate() + 30);
 
       // Instead of direct borrow, create a reservation (borrow request) for librarian processing
+      // The backend will handle condition assessment during the reservation process
       const response = await ApiService.reserveBook(userId, bookId, {
         expectedReturnDate: expectedReturnDate.toISOString()
       });
@@ -286,14 +289,17 @@ const BorrowScreen = () => {
         </View>
       </ScrollView>
 
-      {/* Condition Assessment Modal */}
+      {/* Condition Assessment Modal - Review Mode */}
       <ConditionAssessment
         visible={conditionModalVisible}
         onClose={() => setConditionModalVisible(false)}
         onSubmit={handleConditionSubmit}
         title="Borrow Request - Condition Review"
-        submitText="Submit Request"
+        submitText="Confirm Borrow Request"
         isReturn={false}
+        readOnly={false}
+        initialCondition={selectedCopy?.condition || 'GOOD'}
+        reviewMode={true}
       />
     </View>
   );

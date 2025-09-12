@@ -1,16 +1,23 @@
-import React, { useState, useEffect } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
-} from "react-native";
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from "expo-router";
+import React, { useEffect, useState } from "react";
+import {
+    ActivityIndicator,
+    Alert,
+    Dimensions,
+    Image,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
+} from "react-native";
 
 const API_BASE = "https://kcmi-library-system.vercel.app/api/auth";
+const { width, height } = Dimensions.get('window');
 
 const ForgotPasswordScreen = () => {
   const [step, setStep] = useState("email"); // "email" | "otp"
@@ -112,156 +119,360 @@ const ForgotPasswordScreen = () => {
   };
 
   return (
-    <View style={styles.screen}>
-      <View style={styles.header}>
-        <Text style={styles.headerText}>KCMI LIBRARY</Text>
-      </View>
+    <KeyboardAvoidingView 
+      style={styles.container} 
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView 
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header Section */}
+        <View style={styles.headerSection}>
+          <Image
+            source={require('../../assets/images/kcmi-logo.png')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
+          <Text style={styles.title}>KCMI LIBRARY</Text>
+          <Text style={styles.subtitle}>Password Recovery</Text>
+        </View>
 
-      <View style={styles.container}>
-        <Text style={styles.title}>Password Reset</Text>
+        {/* Form Section */}
+        <View style={styles.formSection}>
+          {step === "email" ? (
+            <>
+              <View style={styles.stepContainer}>
+                <MaterialCommunityIcons name="email" size={48} color="#3b82f6" />
+                <Text style={styles.stepTitle}>Reset Your Password</Text>
+                <Text style={styles.stepSubtitle}>
+                  Enter your email address and we'll send you a verification code
+                </Text>
+              </View>
 
-        {step === "email" ? (
-          <>
-            <Text style={styles.label}>Enter your email address</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="user@example.com"
-              autoCapitalize="none"
-              keyboardType="email-address"
-              value={email}
-              onChangeText={setEmail}
-            />
-            <Text style={styles.infoText}>
-              We'll send a 6-digit code to your registered email.
-            </Text>
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Email Address</Text>
+                <View style={styles.inputWrapper}>
+                  <MaterialCommunityIcons name="email" size={20} color="#6b7280" />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter your email address"
+                    placeholderTextColor="#9ca3af"
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    value={email}
+                    onChangeText={setEmail}
+                  />
+                </View>
+              </View>
 
-            <TouchableOpacity
-              style={styles.button}
-              onPress={sendOTP}
-              disabled={sending}
-            >
-              {sending ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.buttonText}>Send OTP</Text>
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={() => router.push("/login")}>
-              <Text style={styles.backText}>Back to Login</Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <>
-            <Text style={styles.label}>Enter OTP</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="123456"
-              value={otp}
-              onChangeText={(t) => setOtp(t.replace(/\D/g, "").slice(0, 6))}
-              keyboardType="numeric"
-              maxLength={6}
-            />
-
-            <Text style={styles.label}>New Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="New password"
-              secureTextEntry
-              value={newPassword}
-              onChangeText={setNewPassword}
-            />
-
-            <Text style={styles.label}>Confirm Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Confirm password"
-              secureTextEntry
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-            />
-
-            <TouchableOpacity
-              style={styles.button}
-              onPress={verifyAndReset}
-              disabled={verifying}
-            >
-              {verifying ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.buttonText}>Reset Password</Text>
-              )}
-            </TouchableOpacity>
-
-            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8 }}>
               <TouchableOpacity
-                onPress={resendOTP}
-                disabled={countdown > 0 || sending}
+                style={[styles.button, sending && styles.buttonDisabled]}
+                onPress={sendOTP}
+                disabled={sending}
               >
-                <Text style={[styles.forgotText, countdown > 0 && { opacity: 0.5 }]}>
-                  Resend OTP
-                </Text>
+                {sending ? (
+                  <ActivityIndicator color="#ffffff" size="small" />
+                ) : (
+                  <>
+                    <MaterialCommunityIcons name="send" size={16} color="#ffffff" style={{ marginRight: 8 }} />
+                    <Text style={styles.buttonText}>Send Verification Code</Text>
+                  </>
+                )}
               </TouchableOpacity>
-              {countdown > 0 && (
-                <Text style={{ marginLeft: 10, color: "#666" }}>
-                  ({countdown}s)
-                </Text>
-              )}
-            </View>
 
-            <TouchableOpacity onPress={() => { setStep("email"); setOtp(""); }}>
-              <Text style={styles.backText}>Back</Text>
-            </TouchableOpacity>
-          </>
-        )}
-      </View>
-    </View>
+              <TouchableOpacity 
+                style={styles.backButton}
+                onPress={() => router.push("/login")}
+              >
+                <MaterialCommunityIcons name="arrow-left" size={16} color="#3b82f6" style={{ marginRight: 6 }} />
+                <Text style={styles.backText}>Back to Login</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <View style={styles.stepContainer}>
+                <MaterialCommunityIcons name="shield-check" size={48} color="#10b981" />
+                <Text style={styles.stepTitle}>Enter Verification Code</Text>
+                <Text style={styles.stepSubtitle}>
+                  Enter the 6-digit code sent to {email}
+                </Text>
+              </View>
+
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Verification Code</Text>
+                <View style={styles.inputWrapper}>
+                  <MaterialCommunityIcons name="shield-key" size={20} color="#6b7280" />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="123456"
+                    placeholderTextColor="#9ca3af"
+                    value={otp}
+                    onChangeText={(t) => setOtp(t.replace(/\D/g, "").slice(0, 6))}
+                    keyboardType="numeric"
+                    maxLength={6}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>New Password</Text>
+                <View style={styles.inputWrapper}>
+                  <MaterialCommunityIcons name="key" size={20} color="#6b7280" />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter new password"
+                    placeholderTextColor="#9ca3af"
+                    secureTextEntry
+                    value={newPassword}
+                    onChangeText={setNewPassword}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Confirm Password</Text>
+                <View style={styles.inputWrapper}>
+                  <MaterialCommunityIcons name="key" size={20} color="#6b7280" />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Confirm new password"
+                    placeholderTextColor="#9ca3af"
+                    secureTextEntry
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                  />
+                </View>
+              </View>
+
+              {/* Password Requirements */}
+              <View style={styles.requirementsContainer}>
+                <Text style={styles.requirementsTitle}>Password Requirements:</Text>
+                <Text style={styles.requirementItem}>• At least 6 characters long</Text>
+                <Text style={styles.requirementItem}>• Must match confirmation</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.button, verifying && styles.buttonDisabled]}
+                onPress={verifyAndReset}
+                disabled={verifying}
+              >
+                {verifying ? (
+                  <ActivityIndicator color="#ffffff" size="small" />
+                ) : (
+                  <>
+                    <MaterialCommunityIcons name="check" size={16} color="#ffffff" style={{ marginRight: 8 }} />
+                    <Text style={styles.buttonText}>Reset Password</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* Resend OTP */}
+              <View style={styles.resendContainer}>
+                <TouchableOpacity
+                  onPress={resendOTP}
+                  disabled={countdown > 0 || sending}
+                >
+                  <Text style={[styles.resendText, countdown > 0 && styles.resendTextDisabled]}>
+                    {countdown > 0 ? `Resend in ${countdown}s` : 'Resend Code'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity 
+                style={styles.backButton}
+                onPress={() => { setStep("email"); setOtp(""); }}
+              >
+                <MaterialCommunityIcons name="arrow-left" size={16} color="#3b82f6" style={{ marginRight: 6 }} />
+                <Text style={styles.backText}>Back</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* Footer Section */}
+        <View style={styles.footerSection}>
+          <Text style={styles.footerText}>© 2024 KCMI Library</Text>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#f7f7f7" },
-  header: {
-    backgroundColor: "#2196f3",
-    paddingVertical: 24,
-    alignItems: "center",
-    justifyContent: "center",
-    borderBottomLeftRadius: 12,
-    borderBottomRightRadius: 12,
+  container: { 
+    flex: 1, 
+    backgroundColor: '#f8fafc' 
   },
-  headerText: { color: "#fff", fontWeight: "bold", fontSize: 20, letterSpacing: 1 },
-  container: {
-    backgroundColor: "#fff",
-    margin: 24,
-    marginTop: 32,
-    borderRadius: 12,
+  scrollContainer: {
+    flexGrow: 1,
+    paddingBottom: 40
+  },
+
+  // Header Section
+  headerSection: {
+    alignItems: 'center',
+    paddingTop: height * 0.12,
+    paddingBottom: 24,
+    paddingHorizontal: 20
+  },
+  logoImage: {
+    width: 80,
+    height: 80,
+    marginBottom: 12
+  },
+  title: { 
+    fontSize: 20, 
+    fontWeight: '700', 
+    color: '#1e293b',
+    marginBottom: 4,
+    textAlign: 'center'
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#64748b',
+    textAlign: 'center'
+  },
+
+  // Form Section
+  formSection: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 20,
     padding: 24,
-    alignItems: "center",
-    elevation: 2,
-  },
-  title: { fontSize: 18, fontWeight: "bold", marginBottom: 18, color: "#222" },
-  label: { alignSelf: "flex-start", marginBottom: 6, color: "#222", fontWeight: "500" },
-  input: {
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#bbb",
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2
+  },
+
+  // Step Container
+  stepContainer: {
+    alignItems: 'center',
+    marginBottom: 24
+  },
+  stepTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1f2937',
+    marginTop: 12,
+    marginBottom: 8,
+    textAlign: 'center'
+  },
+  stepSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 20
+  },
+
+  // Input Container
+  inputContainer: {
+    marginBottom: 20
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
     borderRadius: 8,
-    padding: 12,
-    width: "100%",
-    marginBottom: 12,
-    backgroundColor: "#f7f7f7",
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 2
   },
-  infoText: { fontSize: 13, color: "#666", marginBottom: 18, textAlign: "center" },
+  input: { 
+    flex: 1,
+    fontSize: 16,
+    color: '#1f2937',
+    paddingVertical: 12,
+    marginLeft: 8
+  },
+
+  // Button
   button: {
-    backgroundColor: "#2196f3",
+    backgroundColor: '#3b82f6',
     paddingVertical: 14,
-    borderRadius: 6,
-    alignItems: "center",
-    width: "100%",
-    marginBottom: 18,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 16,
+    flexDirection: 'row',
+    justifyContent: 'center'
   },
-  buttonText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-  backText: { color: "#2196f3", textAlign: "center", textDecorationLine: "underline", fontSize: 14 },
-  forgotText: { marginTop: 10, color: "#2176d2", textAlign: "center" },
+  buttonDisabled: {
+    backgroundColor: '#9ca3af'
+  },
+  buttonText: { 
+    color: '#ffffff', 
+    fontSize: 16,
+    fontWeight: '700'
+  },
+
+  // Back Button
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12
+  },
+  backText: { 
+    color: '#3b82f6', 
+    fontSize: 14,
+    fontWeight: '600'
+  },
+
+  // Requirements
+  requirementsContainer: {
+    backgroundColor: '#f0f9ff',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 20
+  },
+  requirementsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0c4a6e',
+    marginBottom: 4
+  },
+  requirementItem: {
+    fontSize: 12,
+    color: '#0369a1',
+    marginBottom: 2
+  },
+
+  // Resend
+  resendContainer: {
+    alignItems: 'center',
+    marginBottom: 16
+  },
+  resendText: {
+    color: '#3b82f6',
+    fontSize: 14,
+    fontWeight: '600'
+  },
+  resendTextDisabled: {
+    color: '#9ca3af'
+  },
+
+  // Footer
+  footerSection: {
+    alignItems: 'center',
+    marginTop: 20,
+    paddingHorizontal: 20
+  },
+  footerText: {
+    color: '#9ca3af',
+    fontSize: 14,
+    marginBottom: 4
+  }
 });
 
 export default ForgotPasswordScreen;

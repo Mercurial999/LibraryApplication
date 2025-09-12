@@ -16,7 +16,9 @@ const ConditionAssessment = ({
   title = "Book Condition Assessment",
   submitText = "Submit",
   initialCondition = null,
-  isReturn = false
+  isReturn = false,
+  readOnly = false, // New prop to disable condition selection
+  reviewMode = false // New prop for review mode (shows condition but allows confirmation)
 }) => {
   const [selectedCondition, setSelectedCondition] = useState(initialCondition || 'GOOD');
   const [notes, setNotes] = useState('');
@@ -30,7 +32,7 @@ const ConditionAssessment = ({
   ];
 
   const handleSubmit = () => {
-    if (!selectedCondition) {
+    if (!readOnly && !reviewMode && !selectedCondition) {
       Alert.alert('Error', 'Please select a book condition');
       return;
     }
@@ -65,12 +67,22 @@ const ConditionAssessment = ({
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.title}>{title}</Text>
-            <Text style={styles.requiredText}>* Required before {isReturn ? 'return' : 'borrowing'}</Text>
+            {!readOnly && !reviewMode && (
+              <Text style={styles.requiredText}>* Required before {isReturn ? 'return' : 'borrowing'}</Text>
+            )}
+            {readOnly && (
+              <Text style={styles.readOnlyText}>View only - Condition provided by backend</Text>
+            )}
+            {reviewMode && (
+              <Text style={styles.reviewText}>Review condition and confirm your request</Text>
+            )}
           </View>
 
           {/* Condition Selection */}
           <View style={styles.conditionSection}>
-            <Text style={styles.sectionTitle}>Select Book Condition:</Text>
+            <Text style={styles.sectionTitle}>
+              {readOnly ? 'Book Condition:' : reviewMode ? 'Book Condition (Backend Assessment):' : 'Select Book Condition:'}
+            </Text>
             
             <View style={styles.conditionGrid}>
               {conditions.map((condition) => (
@@ -79,14 +91,19 @@ const ConditionAssessment = ({
                   style={[
                     styles.conditionOption,
                     selectedCondition === condition.value && styles.selectedCondition,
-                    { borderColor: condition.color }
+                    { borderColor: condition.color },
+                    readOnly && styles.conditionOptionReadOnly,
+                    reviewMode && selectedCondition === condition.value && styles.reviewModeSelected
                   ]}
-                  onPress={() => setSelectedCondition(condition.value)}
+                  onPress={() => !readOnly && setSelectedCondition(condition.value)}
+                  disabled={readOnly || reviewMode}
                 >
                   <Text style={styles.conditionIcon}>{condition.icon}</Text>
                   <Text style={[
                     styles.conditionLabel,
-                    selectedCondition === condition.value && styles.selectedConditionText
+                    selectedCondition === condition.value && styles.selectedConditionText,
+                    readOnly && styles.conditionLabelReadOnly,
+                    reviewMode && selectedCondition === condition.value && styles.reviewModeSelectedText
                   ]}>
                     {condition.label}
                   </Text>
@@ -101,13 +118,14 @@ const ConditionAssessment = ({
               {isReturn ? 'Return' : 'Borrow'} Notes (Optional):
             </Text>
             <TextInput
-              style={styles.notesInput}
-              placeholder={`Describe any damage or condition changes...`}
+              style={[styles.notesInput, readOnly && styles.notesInputReadOnly]}
+              placeholder={readOnly ? 'No notes available' : reviewMode ? 'Add any additional notes...' : `Describe any damage or condition changes...`}
               multiline
               numberOfLines={4}
               value={notes}
               onChangeText={setNotes}
               textAlignVertical="top"
+              editable={!readOnly}
             />
           </View>
 
@@ -117,19 +135,23 @@ const ConditionAssessment = ({
               style={styles.cancelButton} 
               onPress={handleCancel}
             >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+              <Text style={styles.cancelButtonText}>
+                {readOnly ? 'Close' : 'Cancel'}
+              </Text>
             </TouchableOpacity>
             
-            <TouchableOpacity 
-              style={[
-                styles.submitButton,
-                !selectedCondition && styles.submitButtonDisabled
-              ]} 
-              onPress={handleSubmit}
-              disabled={!selectedCondition}
-            >
-              <Text style={styles.submitButtonText}>{submitText}</Text>
-            </TouchableOpacity>
+            {(!readOnly || reviewMode) && (
+              <TouchableOpacity 
+                style={[
+                  styles.submitButton,
+                  !readOnly && !reviewMode && !selectedCondition && styles.submitButtonDisabled
+                ]} 
+                onPress={handleSubmit}
+                disabled={!readOnly && !reviewMode && !selectedCondition}
+              >
+                <Text style={styles.submitButtonText}>{submitText}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </View>
@@ -165,6 +187,17 @@ const styles = StyleSheet.create({
   requiredText: {
     fontSize: 14,
     color: '#EF4444',
+    fontWeight: '500',
+  },
+  readOnlyText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+    fontStyle: 'italic',
+  },
+  reviewText: {
+    fontSize: 14,
+    color: '#3B82F6',
     fontWeight: '500',
   },
   conditionSection: {
@@ -207,6 +240,22 @@ const styles = StyleSheet.create({
   selectedConditionText: {
     color: '#1F2937',
   },
+  conditionOptionReadOnly: {
+    opacity: 0.6,
+    backgroundColor: '#F3F4F6',
+  },
+  conditionLabelReadOnly: {
+    color: '#9CA3AF',
+  },
+  reviewModeSelected: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 3,
+    borderColor: '#3B82F6',
+  },
+  reviewModeSelectedText: {
+    color: '#1E40AF',
+    fontWeight: '700',
+  },
   notesSection: {
     marginBottom: 24,
   },
@@ -219,6 +268,11 @@ const styles = StyleSheet.create({
     color: '#374151',
     backgroundColor: '#F9FAFB',
     minHeight: 80,
+  },
+  notesInputReadOnly: {
+    backgroundColor: '#F3F4F6',
+    color: '#9CA3AF',
+    borderColor: '#E5E7EB',
   },
   actionButtons: {
     flexDirection: 'row',

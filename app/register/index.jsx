@@ -156,10 +156,18 @@ const RegistrationScreen = () => {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={64}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#f8fafc' }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={64}>
+      <View style={styles.topBar}>
+        <View style={{ position: 'absolute', left: 8, bottom: 12 }}>
+          <TouchableOpacity onPress={() => router.push('/login')} style={styles.topBarBack}>
+            <Text style={styles.topBarButtonText}>‹</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.topBarTitle}>KCMI Library Registration</Text>
+      </View>
       <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
         <View style={styles.container}>
-      <Text style={{ marginBottom: 6, fontWeight: "600" }}>Name</Text>
+      <Text style={styles.sectionHeading}>Name</Text>
       <View style={{ flexDirection: "row", marginBottom: 8 }}>
         <View style={{ flex: 1, marginRight: 8 }}>
           <InputField label="First Name" value={firstName} onChangeText={setFirstName} />
@@ -172,7 +180,7 @@ const RegistrationScreen = () => {
         </View>
       </View>
       <InputField label="Email Address" value={email} onChangeText={setEmail} keyboardType="email-address" />
-      <Text style={{ marginTop: 8, marginBottom: 6, fontWeight: "600" }}>Role</Text>
+      <Text style={styles.sectionHeading}>Role</Text>
       <RadioOption label="Student" value="student" selected={role === "student"} onPress={setRole} />
       <RadioOption label="Teacher" value="teacher" selected={role === "teacher"} onPress={setRole} />
 
@@ -194,7 +202,7 @@ const RegistrationScreen = () => {
 
       {role === "student" && (
         <>
-          <Text style={{ marginTop: 8, marginBottom: 6, fontWeight: "600" }}>Academic Level</Text>
+          <Text style={styles.sectionHeading}>Academic Level</Text>
           <RadioOption label="Elementary" value="elementary" selected={academicLevel === "elementary"} onPress={setAcademicLevel} />
           <RadioOption label="High School" value="high-school" selected={academicLevel === "high-school"} onPress={setAcademicLevel} />
           <RadioOption label="College" value="college" selected={academicLevel === "college"} onPress={setAcademicLevel} />
@@ -203,7 +211,7 @@ const RegistrationScreen = () => {
 
       <InputField label="Grade / Class / Section" value={gradeLevel} onChangeText={setGradeLevel} />
 
-      <Text style={{ marginTop: 8, marginBottom: 6, fontWeight: "600" }}>Verification Photos</Text>
+      <Text style={styles.sectionHeading}>Verification Photos</Text>
       <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
         <TouchableOpacity style={styles.uploadBtn} onPress={() => pickImage(setProfilePhoto)}>
           <Text style={{ color: "#fff", fontWeight: "600" }}>Pick 2x2 Photo</Text>
@@ -228,14 +236,43 @@ const RegistrationScreen = () => {
 };
 
 const styles = StyleSheet.create({
+  topBar: {
+    backgroundColor: '#3b82f6',
+    paddingTop: Platform.OS === 'ios' ? 44 : 16,
+    paddingBottom: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    width: '100%'
+  },
+  topBarBack: { paddingVertical: 4, paddingHorizontal: 8 },
+  topBarButtonText: { color: '#ffffff', fontWeight: '700', fontSize: 20, lineHeight: 20 },
+  topBarTitle: { color: '#ffffff', fontSize: 18, fontWeight: '700', textAlign: 'center' },
+  pageTitle: { fontSize: 0 },
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: "#fff",
+    padding: 16,
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    maxWidth: 560,
+    width: '100%',
+    alignSelf: 'center'
   },
   scrollContainer: {
+    paddingTop: 16,
     paddingBottom: 32,
+    paddingHorizontal: 16,
+    alignItems: 'stretch'
   },
+  sectionHeading: { marginBottom: 6, fontWeight: '700', color: '#1f2937' },
   optionRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -281,7 +318,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#eee",
   },
   uploadBtn: {
-    backgroundColor: "#3498db",
+    backgroundColor: "#3b82f6",
     paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 8,

@@ -1,13 +1,15 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
 
 // Lazy import components to avoid circular deps during creation
-import FinesSummaryCard from '../../components/modules/FinesSummaryCard';
-import OverdueBookCard from '../../components/modules/OverdueBookCard';
 
 export default function OverdueFinesScreen() {
+  const router = useRouter();
   const [overdueData, setOverdueData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -49,7 +51,7 @@ export default function OverdueFinesScreen() {
   };
 
   const handleViewDetails = (bookId) => {
-    Alert.alert('Details', 'Fine details modal coming soon.');
+    router.push(`/overdue-fines/details?id=${encodeURIComponent(bookId)}`);
   };
 
   if (loading) {
@@ -62,40 +64,310 @@ export default function OverdueFinesScreen() {
   }
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-    >
-      <FinesSummaryCard summary={overdueData?.finesSummary} />
-
-      <View style={styles.overdueSection}>
-        <Text style={styles.sectionTitle}>Overdue Books</Text>
-        {overdueData?.overdueBooks?.length ? (
-          overdueData.overdueBooks.map((book) => (
-            <OverdueBookCard
-              key={book.id}
-              book={book}
-              onPayFine={() => handlePayFine(book.fine.id)}
-              onViewDetails={() => handleViewDetails(book.id)}
-            />
-          ))
-        ) : (
-          <Text style={styles.emptyText}>No overdue books 🎉</Text>
-        )}
-      </View>
-
+    <View style={styles.container}>
+      <Header 
+        title="Overdue & Fines"
+        subtitle="Your fines summary and overdue books"
+        onMenuPress={() => setSidebarVisible(true)}
+      />
       <Sidebar visible={sidebarVisible} onClose={() => setSidebarVisible(false)} currentRoute={'/overdue-fines'} />
-    </ScrollView>
+      <ScrollView
+        style={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#3b82f6"]} />}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Fines Summary Card */}
+        <View style={styles.summaryCard}>
+          <View style={styles.summaryHeader}>
+            <MaterialCommunityIcons name="currency-usd" size={24} color="#dc2626" />
+            <Text style={styles.summaryTitle}>Fines Summary</Text>
+          </View>
+          <View style={styles.summaryContent}>
+            <Text style={styles.totalAmount}>
+              ₱{overdueData?.finesSummary?.totalAmount || '0.00'}
+            </Text>
+            <Text style={styles.summarySubtext}>
+              {overdueData?.finesSummary?.unpaidCount || 0} unpaid fines
+            </Text>
+          </View>
+        </View>
+
+        {/* Overdue Books Section */}
+        <View style={styles.overdueSection}>
+          <View style={styles.sectionHeader}>
+            <MaterialCommunityIcons name="book-alert" size={20} color="#dc2626" />
+          <Text style={styles.sectionTitle}>Overdue Books</Text>
+          </View>
+          
+          {overdueData?.overdueBooks?.length ? (
+            overdueData.overdueBooks.map((book) => (
+              <View key={book.id} style={styles.overdueCard}>
+                <View style={styles.bookHeader}>
+                  <View style={styles.bookInfo}>
+                    <Text style={styles.bookTitle} numberOfLines={2}>
+                      {book.title || 'Unknown Book'}
+                    </Text>
+                    <Text style={styles.bookAuthor}>
+                      by {book.author || 'Unknown Author'}
+                    </Text>
+                  </View>
+                  <View style={[styles.statusBadge, { backgroundColor: '#dc2626' }]}>
+                    <Text style={styles.statusText}>Overdue</Text>
+                  </View>
+                </View>
+
+                <View style={styles.bookDetails}>
+                  <View style={styles.detailItem}>
+                    <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
+                    <Text style={styles.detailText}>
+                      Due: {new Date(book.dueDate).toLocaleDateString()}
+                    </Text>
+                  </View>
+                  <View style={styles.detailItem}>
+                    <MaterialCommunityIcons name="clock-alert" size={16} color="#dc2626" />
+                    <Text style={[styles.detailText, { color: '#dc2626' }]}>
+                      {book.daysOverdue || 0} days overdue
+                    </Text>
+                  </View>
+                  {book.fine && (
+                    <View style={styles.detailItem}>
+                      <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
+                      <Text style={[styles.detailText, { color: '#dc2626' }]}>
+                        Fine: ₱{book.fine.amount?.toFixed(2) || '0.00'}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.actionButtons}>
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.viewButton]}
+                    onPress={() => handleViewDetails(book.id)}
+                  >
+                    <MaterialCommunityIcons name="eye" size={16} color="#ffffff" />
+                    <Text style={styles.actionButtonText}>View Details</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.payButton]}
+                    onPress={() => handlePayFine(book.fine?.id)}
+                  >
+                    <MaterialCommunityIcons name="credit-card" size={16} color="#ffffff" />
+                    <Text style={styles.actionButtonText}>Pay Fine</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <MaterialCommunityIcons name="check-circle" size={48} color="#059669" />
+              <Text style={styles.emptyTitle}>No Overdue Books</Text>
+              <Text style={styles.emptySubtitle}>Great job! All your books are returned on time.</Text>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16, backgroundColor: '#0f172a', flex: 1 },
-  overdueSection: { marginTop: 24 },
-  sectionTitle: { color: '#e2e8f0', fontSize: 20, fontWeight: '700', marginBottom: 12 },
-  emptyText: { color: '#94a3b8', fontSize: 16 },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 64, backgroundColor: '#0f172a' },
-  loadingText: { marginTop: 12, color: '#94a3b8' }
+  container: { 
+    backgroundColor: '#f8fafc', 
+    flex: 1 
+  },
+  scroll: { 
+    padding: 20 
+  },
+  
+  // Summary Card
+  summaryCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  summaryTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginLeft: 8,
+  },
+  summaryContent: {
+    alignItems: 'center',
+  },
+  totalAmount: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#dc2626',
+    marginBottom: 8,
+  },
+  summarySubtext: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+
+  // Overdue Section
+  overdueSection: { 
+    marginTop: 24 
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  sectionTitle: { 
+    color: '#1e293b', 
+    fontSize: 20, 
+    fontWeight: '700', 
+    marginLeft: 8,
+  },
+
+  // Overdue Cards
+  overdueCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  bookHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  bookInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  bookTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginBottom: 4,
+    lineHeight: 24,
+  },
+  bookAuthor: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '500',
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  statusText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // Book Details
+  bookDetails: {
+    marginBottom: 16,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  detailText: {
+    fontSize: 14,
+    color: '#64748b',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+
+  // Action Buttons
+  actionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  viewButton: {
+    backgroundColor: '#3b82f6',
+  },
+  payButton: {
+    backgroundColor: '#dc2626',
+  },
+  actionButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+
+  // Empty State
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 16,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+
+  // Loading States
+  centered: { 
+    flex: 1, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    paddingTop: 64, 
+    backgroundColor: '#f8fafc' 
+  },
+  loadingText: { 
+    marginTop: 16, 
+    color: '#64748b',
+    fontSize: 16,
+  },
 });
 
 

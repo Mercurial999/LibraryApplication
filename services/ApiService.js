@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { handleBackendError } from '../utils/ErrorHandler';
 
 export default class ApiService {
   static API_BASE = "https://kcmi-library-system.vercel.app";
@@ -158,46 +159,86 @@ export default class ApiService {
   static async handleApiResponse(res, endpoint) {
     const text = await res.text().catch(() => '');
     
+    console.log(`🔍 API Response Debug for ${endpoint}:`);
+    console.log(`Status: ${res.status}`);
+    console.log(`Headers:`, res.headers);
+    console.log(`Response text (first 200 chars):`, text.substring(0, 200));
+    
     // Check if response is HTML (usually means CORS error or server error)
     if (text.trim().startsWith('<!DOCTYPE html>') || text.trim().startsWith('<html')) {
-      throw new Error(`Server returned HTML instead of JSON. This usually means a CORS issue or the endpoint doesn't exist. Endpoint: ${endpoint}`);
+      console.error(`❌ Server returned HTML instead of JSON for ${endpoint}`);
+      const err = new Error(`Server returned HTML instead of JSON. This usually means a CORS issue or the endpoint doesn't exist. Endpoint: ${endpoint}`);
+      err.errorCode = 'HTML_RESPONSE';
+      throw err;
     }
     
     let data = {};
     try {
       data = text ? JSON.parse(text) : {};
-    } catch {
+    } catch (parseError) {
+      console.error(`❌ JSON Parse Error for ${endpoint}:`, parseError);
+      console.error(`Raw response:`, text);
       data = { message: text || 'Invalid response format' };
     }
 
     if (!res.ok) {
-      const errMsg = data.message || data.error || `Request failed with status ${res.status}`;
-      throw new Error(errMsg);
+      console.error(`❌ API Error for ${endpoint}:`, data);
+      
+      // Handle backend error response format
+      if (data.error && typeof data.error === 'object') {
+        const enhancedError = handleBackendError(data);
+        throw enhancedError;
+      }
+      
+      // Handle different error formats
+      let errMsg;
+      let errCode;
+      if (typeof data === 'string') {
+        errMsg = data;
+      } else if (data.message) {
+        errMsg = data.message;
+      } else if (data.error) {
+        errMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+      } else {
+        errMsg = `Request failed with status ${res.status}`;
+      }
+      const err = new Error(errMsg);
+      if (errCode) err.errorCode = errCode;
+      throw err;
     }
 
+    console.log(`✅ API Success for ${endpoint}:`, data);
     return data;
   }
 
   // Helper method to make API calls with CORS handling
   static async makeApiCall(url, options = {}) {
     try {
+      console.log(`🌐 Making API call to: ${url}`);
+      console.log(`📋 Options:`, options);
+      
       const headers = await this.getAuthHeaders();
+      console.log(`🔑 Auth headers:`, headers);
+      
+      // Use standard CORS mode - the backend is already configured correctly
+      console.log(`🔄 Using CORS mode: cors`);
       const res = await fetch(url, {
         ...options,
         headers: {
           ...headers,
           ...options.headers
         },
-        // Add CORS mode to handle cross-origin requests
-        mode: 'cors',
+        mode: 'cors', // Use standard CORS mode only
         credentials: 'omit'
       });
       
+      console.log(`📡 Fetch response received for ${url}`);
       return await this.handleApiResponse(res, url);
     } catch (err) {
+      console.error(`❌ Fetch error for ${url}:`, err);
       // Handle network errors and CORS issues
-      if (err.message.includes('CORS') || err.message.includes('HTML')) {
-        throw new Error(`Backend connection issue: ${err.message}. Please check if the backend is running and CORS is properly configured.`);
+      if (err.message.includes('CORS') || err.message.includes('HTML') || err.message.includes('Failed to fetch')) {
+        throw new Error(`CORS/Network issue: ${err.message}. The backend may not be configured to allow requests from this origin.`);
       }
       throw err;
     }
@@ -529,10 +570,14 @@ export default class ApiService {
     const url = `${this.API_BASE}/api/books?${queryParams.toString()}`;
     
     try {
-      console.log('Fetching books from:', url);
+      console.log('🔍 Fetching books from:', url);
+      console.log('📋 Query params:', queryParams.toString());
+      
       const response = await this.makeApiCall(url, {
         method: 'GET'
       });
+      
+      console.log('✅ API Response received:', response);
       
       // Cache the response if it's successful
       if (response.success) {
@@ -547,73 +592,68 @@ export default class ApiService {
       
       return response;
     } catch (err) {
-      console.error('Books API failed, using fallback data:', err.message);
-      // Return fallback data for testing
-      const fallbackData = {
+      console.error('❌ Books API failed:', err.message);
+      console.error('❌ Full error:', err);
+      
+      // Check if it's a CORS error
+      if (err.message.includes('CORS') || err.message.includes('Failed to fetch')) {
+        console.log('🚨 CORS ERROR DETECTED!');
+        console.log('📋 Backend team needs to configure CORS to allow localhost:8081');
+        console.log('📄 See BACKEND_REQUIREMENTS.md for details');
+        console.log('🧪 Use API_TEST_SCRIPT.js to test fixes');
+        
+        return {
         success: true,
         data: {
-          books: [
-            {
-              id: '1',
-              title: 'The Great Gatsby',
-              author: 'F. Scott Fitzgerald',
-              subject: 'Fiction',
-              ddc: '813.52',
-              location: 'A-1-01',
-              availability: 'available',
-              totalCopies: 2,
-              availableCopies: 1,
-              isbn: '978-0743273565',
-              publicationYear: 1925,
-              publisher: 'Scribner',
-              description: 'A story of the fabulously wealthy Jay Gatsby and his love for the beautiful Daisy Buchanan.'
-            },
-            {
-              id: '2',
-              title: 'To Kill a Mockingbird',
-              author: 'Harper Lee',
-              subject: 'Fiction',
-              ddc: '813.54',
-              location: 'A-1-02',
-              availability: 'available',
-              totalCopies: 3,
-              availableCopies: 2,
-              isbn: '978-0446310789',
-              publicationYear: 1960,
-              publisher: 'Grand Central Publishing',
-              description: 'The story of young Scout Finch and her father Atticus in a racially divided Alabama town.'
-            },
-            {
-              id: '3',
-              title: '1984',
-              author: 'George Orwell',
-              subject: 'Fiction',
-              ddc: '823.912',
-              location: 'A-1-03',
-              availability: 'unavailable',
-              totalCopies: 1,
-              availableCopies: 0,
-              isbn: '978-0451524935',
-              publicationYear: 1949,
-              publisher: 'Signet Classic',
-              description: 'A dystopian novel about totalitarianism and surveillance society.'
+            books: [],
+            pagination: {
+              currentPage: 1,
+              totalPages: 1,
+              totalBooks: 0,
+              hasNext: false,
+              hasPrev: false
             }
-          ],
+          },
+          error: {
+            type: 'CORS_ERROR',
+            message: 'Backend CORS configuration needed. See BACKEND_REQUIREMENTS.md'
+          }
+        };
+      }
+      
+      // Check if it's a network error
+      if (err.message.includes('Network')) {
+        console.log('🌐 Network error detected, returning empty results');
+        return {
+          success: true,
+          data: {
+            books: [],
           pagination: {
             currentPage: 1,
             totalPages: 1,
-            totalBooks: 3,
+              totalBooks: 0,
             hasNext: false,
             hasPrev: false
           }
         }
       };
+      }
       
-      // Cache the fallback data
-      this.catalogCache = fallbackData;
-      this.catalogCacheTime = now;
-      
-      return fallbackData;
+      // For other errors, still return empty results but log the error
+      console.log('⚠️ API error, returning empty results:', err.message);
+      return {
+        success: true,
+        data: {
+          books: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 1,
+            totalBooks: 0,
+            hasNext: false,
+            hasPrev: false
+          }
+        }
+      };
     }
   }
 
@@ -695,25 +735,113 @@ export default class ApiService {
       }
     }
     
-    // If all endpoints fail, return fallback data
-    console.log('All book endpoints failed, using fallback data');
+    // If all endpoints fail, throw error
+    console.log('All book endpoints failed');
     console.log('=== End getBookById Debug ===');
+    throw new Error('Book not found - all endpoints failed');
+  }
+
+  /**
+   * Get borrowed books (books with borrowed copies) for reservation
+   */
+  static async getBorrowedBooks(params = {}) {
+    try {
+      console.log('🔍 Fetching borrowed books for reservation...');
+      
+      // Get all books and filter for those with borrowed copies
+      const response = await this.getBooks({
+        ...params,
+        forceRefresh: true,
+        limit: params.limit || 1000
+      });
+
+      if (response.success && response.data && response.data.books) {
+        // Filter to only show books that have at least one borrowed copy
+        const borrowedBooks = response.data.books.filter(book => 
+          book.availableCopies < book.totalCopies && book.totalCopies > 0
+        );
+        
+        console.log(`📚 Found ${borrowedBooks.length} books with borrowed copies out of ${response.data.books.length} total books`);
+        
     return {
       success: true,
       data: {
-        id: bookId,
-        title: 'Sample Book Title',
-        author: 'Sample Author',
-        subject: 'Sample Subject',
-        ddc: '000.000',
-        location: 'A-1-01',
+            books: borrowedBooks,
+            pagination: {
+              ...response.data.pagination,
+              totalBooks: borrowedBooks.length
+            }
+          }
+        };
+      }
+      
+      return {
+        success: true,
+        data: {
+          books: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 1,
+            totalBooks: 0,
+            hasNext: false,
+            hasPrev: false
+          }
+        }
+      };
+    } catch (error) {
+      console.error('Error fetching borrowed books:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get available books (for direct borrowing)
+   */
+  static async getAvailableBooks(params = {}) {
+    try {
+      console.log('🔍 Fetching available books for borrowing...');
+      
+      const response = await this.getBooks({
+        ...params,
         availability: 'available',
-        totalCopies: 3,
-        availableCopies: 2,
-        isbn: '978-0-000000-0-0',
-        publicationYear: 2024,
-        publisher: 'Sample Publisher',
-        description: 'This is a sample book description for testing purposes. The backend endpoint is not yet implemented or is not responding.'
+        forceRefresh: true,
+        limit: params.limit || 1000
+      });
+
+      if (response.success && response.data && response.data.books) {
+        console.log(`📚 Found ${response.data.books.length} available books`);
+        return response;
+      }
+      
+      return {
+        success: true,
+        data: {
+          books: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 1,
+            totalBooks: 0,
+            hasNext: false,
+            hasPrev: false
+          }
+        }
+      };
+    } catch (error) {
+      console.error('Error fetching available books:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get available copies for a specific book
+   */
+  static async getBookCopies(bookId) {
+    console.log('⚠️ getBookCopies is deprecated - copy data is already included in book responses');
+    console.log('📚 Copy information is available in the main book data from getBooks/getBookById');
+    return {
+      success: true,
+      data: {
+        copies: []
       }
     };
   }
@@ -742,10 +870,12 @@ export default class ApiService {
   // ===== MY BOOKS API METHODS =====
 
   /**
-   * Get user's borrowed books
+   * Get user's books (supports both old and new call signatures)
+   * Old: getUserBooks(userId, status='all', includeHistory=false)
+   * New: getUserBooks(userId, { status?: string, includeHistory?: boolean })
    */
-  static async getUserBooks(userId, params = {}) {
-    // If userId is not provided or is "current-user-id", try to get it from stored user data
+  static async getUserBooks(userId, statusOrParams = 'all', includeHistoryMaybe = false) {
+    // Resolve userId from storage when needed
     let actualUserId = userId;
     if (!actualUserId || actualUserId === 'current-user-id') {
       try {
@@ -765,66 +895,30 @@ export default class ApiService {
       throw new Error('User ID not available');
     }
 
+    // Support both signatures
+    let status = 'all';
+    let includeHistory = false;
+    if (typeof statusOrParams === 'object' && statusOrParams !== null) {
+      status = statusOrParams.status || 'all';
+      includeHistory = Boolean(statusOrParams.includeHistory);
+    } else {
+      status = typeof statusOrParams === 'string' ? statusOrParams : 'all';
+      includeHistory = Boolean(includeHistoryMaybe);
+    }
+
     const queryParams = new URLSearchParams();
-    if (params.status) queryParams.append('status', params.status);
-    if (params.includeHistory) queryParams.append('includeHistory', params.includeHistory);
+    if (status && status !== 'all') queryParams.append('status', status);
+    if (includeHistory) queryParams.append('includeHistory', 'true');
 
     const url = `${this.API_BASE}/api/mobile/users/${encodeURIComponent(actualUserId)}/books?${queryParams.toString()}`;
-    
     try {
       console.log('Attempting to fetch user books from:', url);
-      const response = await this.makeApiCall(url, {
-        method: 'GET'
-      });
+      const response = await this.makeApiCall(url, { method: 'GET' });
       console.log('User books API response:', response);
       return response;
     } catch (err) {
-      console.error('User books API failed, using fallback data:', err.message);
-      // Return fallback data for testing
-      return {
-        success: true,
-        data: {
-          borrowedBooks: [
-            {
-              id: 'borrow_1',
-              bookId: '1',
-              bookTitle: 'The Great Gatsby',
-              bookAuthor: 'F. Scott Fitzgerald',
-              bookCover: '',
-              borrowDate: '2024-01-01T10:00:00Z',
-              dueDate: '2024-01-15T10:00:00Z',
-              returnDate: null,
-              status: 'borrowed',
-              daysRemaining: 5,
-              isOverdue: false,
-              fineAmount: 0,
-              fineStatus: 'none',
-              renewalCount: 0,
-              maxRenewals: 2
-            }
-          ],
-          returnedBooks: [
-            {
-              id: 'borrow_2',
-              bookId: '2',
-              bookTitle: 'To Kill a Mockingbird',
-              bookAuthor: 'Harper Lee',
-              bookCover: '',
-              borrowDate: '2023-12-01T10:00:00Z',
-              dueDate: '2023-12-15T10:00:00Z',
-              returnDate: '2023-12-10T10:00:00Z',
-              status: 'returned',
-              daysRemaining: 0,
-              isOverdue: false,
-              fineAmount: 0,
-              fineStatus: 'none',
-              renewalCount: 1,
-              maxRenewals: 2
-            }
-          ],
-          overdueBooks: []
-        }
-      };
+      console.error('User books API failed:', err.message);
+      throw err;
     }
   }
 
@@ -879,8 +973,9 @@ export default class ApiService {
     try {
       const url = `${this.API_BASE}/api/mobile/users/${userId}/books/${bookId}/reserve`;
       const requestBody = {
-        expectedReturnDate: reserveData.expectedReturnDate
-        // No condition assessment required - backend will handle it
+        expectedReturnDate: reserveData.expectedReturnDate,
+        initialCondition: reserveData.initialCondition || 'GOOD',
+        conditionNotes: reserveData.conditionNotes || null
       };
       const response = await this.makeApiCall(url, {
         method: 'POST',
@@ -889,6 +984,73 @@ export default class ApiService {
       return response;
     } catch (err) {
       console.error('Error in reserveBook:', err);
+      
+      // Enhance error messages for better user experience
+      if (err.message && err.message.includes('BORROW_LIMIT')) {
+        throw new Error('You have reached your maximum borrowing limit. Please return some books before making new reservations.');
+      } else if (err.message && err.message.includes('BOOK_UNAVAILABLE')) {
+        throw new Error('This book is no longer available for reservation.');
+      } else if (err.message && err.message.includes('ALREADY_RESERVED')) {
+        throw new Error('You have already reserved this book.');
+      } else if (err.message && err.message.includes('ACCOUNT_SUSPENDED')) {
+        throw new Error('Your account is currently suspended. Please contact the library.');
+      } else if (err.message && err.message.includes('OVERDUE_BOOKS')) {
+        throw new Error('You have overdue books. Please return them before making new reservations.');
+      } else if (err.message && (err.message.includes('CORS') || err.message.includes('Failed to fetch'))) {
+        throw new Error('Network connection issue. Please check your internet connection and try again.');
+      }
+      
+      // For other errors, throw the original error
+      throw err;
+    }
+  }
+
+  // List reservations for a user with optional status filter
+  static async listReservations(userId = null, status = 'all') {
+    const currentUserId = userId || await this.getCurrentUserId();
+    if (!currentUserId) throw new Error('User ID is required');
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    const url = `${this.API_BASE}/api/mobile/users/${currentUserId}/reservations?${params}`;
+    return await this.makeApiCall(url, { method: 'GET' });
+  }
+
+  // Cancel a reservation
+  static async cancelReservation(userId = null, reservationId, reason = '') {
+    const currentUserId = userId || await this.getCurrentUserId();
+    if (!currentUserId) throw new Error('User ID is required');
+    const url = `${this.API_BASE}/api/mobile/users/${currentUserId}/reservations/${reservationId}`;
+    try {
+      const headers = await this.getAuthHeaders();
+      // Attempt 1: DELETE with JSON body (per current guide)
+      const res1 = await fetch(url, {
+        method: 'DELETE',
+        headers,
+        body: JSON.stringify({ reason: reason || 'No longer needed' })
+      });
+      if (res1.ok) return await this.handleApiResponse(res1, url);
+
+      // Attempt 2: DELETE without body (some deployments reject DELETE bodies)
+      const res2 = await fetch(url, { method: 'DELETE', headers });
+      if (res2.ok) return await this.handleApiResponse(res2, url);
+
+      // Attempt 3: Fallback to admin PATCH to set status=CANCELLED
+      try {
+        const adminUrl = `${this.API_BASE}/api/book-reservations/${encodeURIComponent(reservationId)}`;
+        const res3 = await this.makeApiCall(adminUrl, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'CANCELLED', notes: reason || 'Cancelled by user', librarianId: currentUserId })
+        });
+        return res3;
+      } catch (fallbackErr) {
+        // if fallback also fails, throw original error
+        const text = await res1.text().catch(() => '');
+        const err = new Error(`Cancel failed. Server responded ${res1.status}. ${text || ''}`.trim());
+        err.original = fallbackErr;
+        throw err;
+      }
+    } catch (err) {
+      console.error('Error cancelling reservation:', err);
       throw err;
     }
   }
@@ -927,6 +1089,22 @@ export default class ApiService {
     } catch (err) {
       throw err;
     }
+  }
+
+  // ===== LOST/DAMAGED REPORTS (current backend implementation) =====
+  static async createLostDamagedReport(payload) {
+    // payload: { reportType: 'LOST'|'DAMAGED', bookId, bookCopyId, userId, transactionId, reportedBy, description, replacementCost, fineAmount }
+    const url = `${this.API_BASE}/api/lost-damaged-reports`;
+    return await this.makeApiCall(url, { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  static async listLostDamagedReports(query = {}) {
+    const params = new URLSearchParams();
+    if (query.status) params.append('status', query.status);
+    if (query.reportType) params.append('reportType', query.reportType);
+    if (query.userId) params.append('userId', query.userId);
+    const url = `${this.API_BASE}/api/lost-damaged-reports?${params.toString()}`;
+    return await this.makeApiCall(url, { method: 'GET' });
   }
 
   // ===== AUTHENTICATION METHODS =====
@@ -992,18 +1170,8 @@ export default class ApiService {
       });
       return response;
     } catch (err) {
-      console.error('Dashboard stats API failed, using fallback data:', err.message);
-      // Return fallback data for testing
-      return {
-        success: true,
-        data: {
-          borrowedCount: 0,
-          overdueCount: 0,
-          pendingRequestsCount: 0,
-          recommendationsCount: 0,
-          totalFines: 0
-        }
-      };
+      console.error('Dashboard stats API failed:', err.message);
+      throw err;
     }
   }
 
@@ -1036,14 +1204,8 @@ export default class ApiService {
       });
       return response;
     } catch (err) {
-      console.error('Recent activity API failed, using fallback data:', err.message);
-      // Return fallback data for testing
-      return {
-        success: true,
-        data: {
-          activities: []
-        }
-      };
+      console.error('Recent activity API failed:', err.message);
+      throw err;
     }
   }
 
@@ -1063,192 +1225,360 @@ export default class ApiService {
     }
   }
 
-  // Fallback data for getBooks when backend is unavailable
-  static getFallbackBooks() {
-    return {
-      success: true,
-      data: [
-        {
-          id: 1,
-          title: "Mathematics 101",
-          author: "John Doe",
-          subject: "Mathematics",
-          ddc: "510.1",
-          isbn: "978-1234567890",
-          publisher: "Math Publishers",
-          publicationYear: 2023,
-          description: "Introduction to mathematics for beginners",
-          totalCopies: 3,
-          availableCopies: 2,
-          coverImage: null
-        },
-        {
-          id: 2,
-          title: "Physics Fundamentals",
-          author: "Jane Smith",
-          subject: "Physics",
-          ddc: "530.1",
-          isbn: "978-0987654321",
-          publisher: "Science Press",
-          publicationYear: 2022,
-          description: "Basic physics concepts and principles",
-          totalCopies: 2,
-          availableCopies: 1,
-          coverImage: null
-        },
-        {
-          id: 3,
-          title: "Literature Classics",
-          author: "William Shakespeare",
-          subject: "Literature",
-          ddc: "820.1",
-          isbn: "978-1122334455",
-          publisher: "Classic Books",
-          publicationYear: 2021,
-          description: "Collection of classic literature works",
-          totalCopies: 4,
-          availableCopies: 3,
-          coverImage: null
+
+  // ===== BORROWING REQUEST API METHODS =====
+
+  /**
+   * Create a borrow request for an available book
+   */
+  static async createBorrowRequest(bookId, borrowData = {}) {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      const url = `${this.API_BASE}/api/mobile/users/${userId}/books/${bookId}/borrow-request`;
+      
+      const requestBody = {
+        copyId: borrowData.copyId, // Required: Specific copy to borrow
+        expectedReturnDate: borrowData.expectedReturnDate,
+        initialCondition: borrowData.initialCondition || 'GOOD',
+        conditionNotes: borrowData.conditionNotes || null,
+        requestNotes: borrowData.requestNotes || null
+      };
+
+      console.log('📝 Creating borrow request:', requestBody);
+
+      const response = await this.makeApiCall(url, {
+        method: 'POST',
+        body: JSON.stringify(requestBody)
+      });
+
+      // If the backend doesn't return copyId or bookId, add them from the request data
+      if (response.success && response.data) {
+        if (!response.data.copyId && requestBody.copyId) {
+          console.log('📋 Backend response missing copyId, adding from request:', requestBody.copyId);
+          response.data.copyId = requestBody.copyId;
         }
-      ]
-    };
+        if (!response.data.bookId && bookId) {
+          console.log('📋 Backend response missing bookId, adding from request:', bookId);
+          response.data.bookId = bookId;
+        }
+      }
+
+      return response;
+    } catch (err) {
+      console.error('Error creating borrow request:', err);
+      
+      // Enhance error messages for better user experience
+      if (err.message && err.message.includes('BORROW_LIMIT')) {
+        throw new Error('You have reached your maximum borrowing limit. Please return some books before requesting new ones.');
+      } else if (err.message && err.message.includes('BOOK_UNAVAILABLE')) {
+        throw new Error('This book is no longer available for borrowing.');
+      } else if (err.message && err.message.includes('INVALID_COPY')) {
+        throw new Error('The selected copy is no longer available.');
+      } else if (err.message && err.message.includes('ALREADY_BORROWED')) {
+        throw new Error('You have already borrowed this book.');
+      } else if (err.message && err.message.includes('ACCOUNT_SUSPENDED')) {
+        throw new Error('Your account is currently suspended. Please contact the library.');
+      } else if (err.message && err.message.includes('OVERDUE_BOOKS')) {
+        throw new Error('You have overdue books. Please return them before borrowing new ones.');
+      } else if (err.message && (err.message.includes('CORS') || err.message.includes('Failed to fetch'))) {
+        throw new Error('Network connection issue. Please check your internet connection and try again.');
+      }
+      
+      // For other errors, throw the original error
+      throw err;
+    }
   }
 
-  // Fallback data for getBookById when backend is unavailable
-  static getFallbackBookById(bookId) {
-    const fallbackBooks = {
-      1: {
-        id: 1,
-        title: "Mathematics 101",
-        author: "John Doe",
-        subject: "Mathematics",
-        ddc: "510.1",
-        isbn: "978-1234567890",
-        publisher: "Math Publishers",
-        publicationYear: 2023,
-        description: "Introduction to mathematics for beginners. This book covers fundamental mathematical concepts including algebra, geometry, and calculus. Perfect for students starting their mathematical journey.",
-        totalCopies: 3,
-        availableCopies: 2,
-        coverImage: null,
-        copies: [
-          {
-            id: 101,
-            copyNumber: "MATH-001",
-            status: "available",
-            location: "Shelf A-1",
-            condition: "good"
-          },
-          {
-            id: 102,
-            copyNumber: "MATH-002",
-            status: "borrowed",
-            borrowedBy: {
-              id: "user123",
-              name: "John Smith"
-            },
-            dueDate: "2025-05-01T00:00:00Z",
-            location: "Shelf A-1",
-            condition: "good"
-          },
-          {
-            id: 103,
-            copyNumber: "MATH-003",
-            status: "available",
-            location: "Shelf A-1",
-            condition: "excellent"
-          }
-        ]
-      },
-      2: {
-        id: 2,
-        title: "Physics Fundamentals",
-        author: "Jane Smith",
-        subject: "Physics",
-        ddc: "530.1",
-        isbn: "978-0987654321",
-        publisher: "Science Press",
-        publicationYear: 2022,
-        description: "Basic physics concepts and principles. This comprehensive guide covers mechanics, thermodynamics, electromagnetism, and modern physics. Essential reading for physics students.",
-        totalCopies: 2,
-        availableCopies: 1,
-        coverImage: null,
-        copies: [
-          {
-            id: 201,
-            copyNumber: "PHYS-001",
-            status: "available",
-            location: "Shelf B-2",
-            condition: "good"
-          },
-          {
-            id: 202,
-            copyNumber: "PHYS-002",
-            status: "borrowed",
-            borrowedBy: {
-              id: "user456",
-              name: "Alice Johnson"
-            },
-            dueDate: "2025-04-20T00:00:00Z",
-            location: "Shelf B-2",
-            condition: "fair"
-          }
-        ]
-      },
-      3: {
-        id: 3,
-        title: "Literature Classics",
-        author: "William Shakespeare",
-        subject: "Literature",
-        ddc: "820.1",
-        isbn: "978-1122334455",
-        publisher: "Classic Books",
-        publicationYear: 2021,
-        description: "Collection of classic literature works including plays, sonnets, and poems. A timeless collection that showcases the brilliance of Shakespeare's writing.",
-        totalCopies: 4,
-        availableCopies: 3,
-        coverImage: null,
-        copies: [
-          {
-            id: 301,
-            copyNumber: "LIT-001",
-            status: "available",
-            location: "Shelf C-3",
-            condition: "excellent"
-          },
-          {
-            id: 302,
-            copyNumber: "LIT-002",
-            status: "available",
-            location: "Shelf C-3",
-            condition: "good"
-          },
-          {
-            id: 303,
-            copyNumber: "LIT-003",
-            status: "borrowed",
-            borrowedBy: {
-              id: "user789",
-              name: "Bob Wilson"
-            },
-            dueDate: "2025-04-25T00:00:00Z",
-            location: "Shelf C-3",
-            condition: "good"
-          },
-          {
-            id: 304,
-            copyNumber: "LIT-004",
-            status: "available",
-            location: "Shelf C-3",
-            condition: "good"
-          }
-        ]
+  /**
+   * Get user's borrow requests
+   */
+  static async getBorrowRequests(status = 'all') {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
       }
-    };
 
-    return {
-      success: true,
-      data: fallbackBooks[bookId] || fallbackBooks[1] // Default to first book if ID not found
-    };
+      // Use the correct API endpoint for borrow requests
+      const params = new URLSearchParams();
+      if (status && status !== 'all') {
+        params.append('status', status);
+      }
+
+      const url = `${this.API_BASE}/api/borrow-requests?${params.toString()}`;
+      
+      const response = await this.makeApiCall(url, {
+        method: 'GET'
+      });
+
+      // Transform the response to match expected format
+      if (response && Array.isArray(response)) {
+        return {
+          success: true,
+          data: {
+            requests: response.map(request => ({
+              id: request.id,
+              bookId: request.bookId,
+              copyId: request.copyId, // Use copyId if available
+              userId: request.userId,
+              status: request.status,
+              dateRequested: request.dateRequested,
+              book: request.book
+            }))
+          }
+        };
+      }
+
+      return response;
+    } catch (err) {
+      console.error('Error fetching borrow requests:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Create a reservation for a borrowed book
+   */
+  static async createReservation(bookId, reservationData = {}) {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      const url = `${this.API_BASE}/api/mobile/users/${userId}/books/${bookId}/reserve`;
+      
+      const requestBody = {
+        expectedReturnDate: reservationData.expectedReturnDate,
+        initialCondition: reservationData.initialCondition || 'GOOD',
+        conditionNotes: reservationData.conditionNotes || null
+      };
+
+      console.log('📝 Creating reservation:', requestBody);
+
+      const response = await this.makeApiCall(url, {
+        method: 'POST',
+        body: JSON.stringify(requestBody)
+      });
+
+      return response;
+    } catch (err) {
+      console.error('Error creating reservation:', err);
+      
+      // Enhance error messages for better user experience
+      const upperMsg = String(err?.message || '').toUpperCase();
+      if (upperMsg.includes('BOOK_AVAILABLE')) {
+        throw new Error('Book has available copies. Please borrow it directly.');
+      }
+      if (upperMsg.includes('DUPLICATE_RESERVATION')) {
+        throw new Error('You already have an active reservation for this book. Check My Reservations.');
+      }
+      if (err.message && err.message.includes('BORROW_LIMIT')) {
+        throw new Error('You have reached your maximum borrowing limit. Please return some books before making new reservations.');
+      } else if (err.message && err.message.includes('BOOK_UNAVAILABLE')) {
+        throw new Error('This book is no longer available for reservation.');
+      } else if (err.message && err.message.includes('ALREADY_RESERVED')) {
+        throw new Error('You have already reserved this book.');
+      } else if (err.message && err.message.includes('ACCOUNT_SUSPENDED')) {
+        throw new Error('Your account is currently suspended. Please contact the library.');
+      } else if (err.message && err.message.includes('OVERDUE_BOOKS')) {
+        throw new Error('You have overdue books. Please return them before making new reservations.');
+      } else if (err.message && (err.message.includes('CORS') || err.message.includes('Failed to fetch'))) {
+        throw new Error('Network connection issue. Please check your internet connection and try again.');
+      }
+      
+      // For other errors, throw the original error
+      throw err;
+    }
+  }
+
+  /**
+   * Get user's reservations
+   */
+  static async getUserReservations(status = 'all') {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      const params = new URLSearchParams();
+      if (status && status !== 'all') {
+        params.append('status', status);
+      }
+
+      const url = `${this.API_BASE}/api/mobile/users/${userId}/reservations?${params.toString()}`;
+      
+      const response = await this.makeApiCall(url, {
+        method: 'GET'
+      });
+
+      return response;
+    } catch (err) {
+      console.error('Error fetching user reservations:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Cancel a reservation
+   */
+  static async cancelReservation(reservationId, reason = '') {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      const url = `${this.API_BASE}/api/mobile/users/${userId}/reservations/${reservationId}`;
+      
+      const requestBody = {
+        reason: reason
+      };
+
+      console.log('📝 Cancelling reservation:', requestBody);
+
+      const response = await this.makeApiCall(url, {
+        method: 'DELETE',
+        body: JSON.stringify(requestBody)
+      });
+
+      return response;
+    } catch (err) {
+      console.error('Error cancelling reservation:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Cancel a borrow request
+   */
+  static async cancelBorrowRequest(requestId, reason = 'Cancelled by user') {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      const url = `${this.API_BASE}/api/mobile/users/${userId}/borrow-requests`;
+      
+      const requestBody = {
+        requestId: requestId,
+        reason: reason
+      };
+
+      const response = await this.makeApiCall(url, {
+        method: 'DELETE',
+        body: JSON.stringify(requestBody)
+      });
+
+      return response;
+    } catch (err) {
+      console.error('Error cancelling borrow request:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Get user's book requests (for teachers)
+   */
+  static async getBookRequests(status = 'all', userId = null) {
+    try {
+      const currentUserId = userId || await this.getCurrentUserId();
+      if (!currentUserId) throw new Error('User ID is required');
+      
+      const params = new URLSearchParams();
+      if (status && status !== 'all') params.append('status', status);
+      if (currentUserId) params.append('userId', currentUserId);
+      
+      const url = `${this.API_BASE}/api/book-requests?${params.toString()}`;
+      
+      const response = await this.makeApiCall(url, {
+        method: 'GET'
+      });
+
+      // Handle different response formats
+      if (Array.isArray(response)) {
+        return { success: true, data: response };
+      } else if (response && Array.isArray(response.data)) {
+        return { success: true, data: response.data };
+      } else if (response && response.success) {
+        return response;
+      } else {
+        return { success: true, data: [] };
+      }
+    } catch (err) {
+      console.error('Error fetching book requests:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Create a book request (for teachers)
+   */
+  static async createBookRequest(bookData) {
+    try {
+      const url = `${this.API_BASE}/api/book-requests`;
+      
+      // Validate required fields
+      if (!bookData.userId) throw new Error('User ID is required');
+      if (!bookData.bookTitle || bookData.bookTitle.trim().length === 0) {
+        throw new Error('Book title is required');
+      }
+      if (!bookData.author || bookData.author.trim().length === 0) {
+        throw new Error('Author is required');
+      }
+      if (!bookData.publisher || bookData.publisher.trim().length === 0) {
+        throw new Error('Publisher is required');
+      }
+      if (!bookData.justification || bookData.justification.trim().length === 0) {
+        throw new Error('Justification is required');
+      }
+
+      const requestBody = {
+        userId: bookData.userId,
+        bookTitle: bookData.bookTitle.trim(),
+        author: bookData.author.trim(),
+        isbn: bookData.isbn?.trim() || undefined,
+        publisher: bookData.publisher.trim(),
+        edition: bookData.edition?.trim() || undefined,
+        estimatedPrice: bookData.estimatedPrice ? parseFloat(bookData.estimatedPrice) : 0,
+        justification: bookData.justification.trim(),
+        priority: bookData.priority || 'MEDIUM'
+      };
+
+      const response = await this.makeApiCall(url, {
+        method: 'POST',
+        body: JSON.stringify(requestBody)
+      });
+
+      return response;
+    } catch (err) {
+      console.error('Error creating book request:', err);
+      throw err;
+    }
+  }
+
+  /**
+   * Cancel a book request (for teachers)
+   */
+  static async cancelBookRequest(requestId) {
+    try {
+      const url = `${this.API_BASE}/api/book-requests/${requestId}`;
+      
+      const response = await this.makeApiCall(url, {
+        method: 'DELETE'
+      });
+
+      return response;
+    } catch (err) {
+      console.error('Error cancelling book request:', err);
+      throw err;
+    }
   }
 
   // ===== FINES API METHODS =====
@@ -1303,6 +1633,22 @@ export default class ApiService {
     }
   }
 
+  // Get user's fine payment history
+  static async getPaymentHistory(userId = null) {
+    try {
+      const currentUserId = userId || await this.getCurrentUserId();
+      if (!currentUserId) throw new Error('User ID is required');
+      const res = await fetch(`${this.API_BASE}/api/mobile/users/${currentUserId}/fines/payment-history`, {
+        method: 'GET',
+        headers: await this.getAuthHeaders(),
+      });
+      return await this.handleApiResponse(res, '/api/mobile/.../fines/payment-history');
+    } catch (error) {
+      console.error('Error fetching payment history:', error);
+      throw error;
+    }
+  }
+
   // Get overdue books that might generate fines
   static async getOverdueBooks(userId = null) {
     try {
@@ -1340,7 +1686,233 @@ export default class ApiService {
     return Math.max(0, diffDays) * finePerDay;
   }
 
-  // Change Password
+  // ===== LOAN RENEWAL & INCIDENT (SPEC-COMPLIANT) =====
+
+  /**
+   * Create a renewal request for a loan (PENDING)
+   * POST /api/loans/[loanId]/renew
+   */
+  static async createLoanRenewal(loanId, requestedBy, notes = '') {
+    try {
+      if (!loanId) throw new Error('Missing loanId');
+      const url = `${this.API_BASE}/api/loans/${encodeURIComponent(loanId)}/renew`;
+      const body = { requestedBy, notes };
+      const res = await this.makeApiCall(url, { method: 'POST', body: JSON.stringify(body) });
+      if (res?.success !== true) {
+        const err = res?.error?.message || 'Failed to create renewal request';
+        throw new Error(err);
+      }
+      return res;
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  /**
+   * Create a lost/damage incident report for a loan (PENDING)
+   * POST /api/loans/[loanId]/incident
+   */
+  static async reportLoanIncident(loanId, payload) {
+    try {
+      if (!loanId) throw new Error('Missing loanId');
+      const url = `${this.API_BASE}/api/loans/${encodeURIComponent(loanId)}/incident`;
+      const res = await this.makeApiCall(url, { method: 'POST', body: JSON.stringify(payload) });
+      if (res?.success !== true) {
+        const err = res?.error?.message || 'Failed to submit incident report';
+        throw new Error(err);
+      }
+      return res;
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  /**
+   * Mobile API: Create renewal request for a specific book (per user)
+   * POST /api/mobile/users/[id]/books/[bookId]/renew
+   */
+  static async createMobileRenewal(userId, bookId, options) {
+    if (!userId) throw new Error('Missing userId');
+    if (!bookId) throw new Error('Missing bookId');
+    const url = `${this.API_BASE}/api/mobile/users/${encodeURIComponent(userId)}/books/${encodeURIComponent(bookId)}/renew`;
+    const copyId = typeof options === 'object' ? options?.copyId : undefined;
+    const reason = typeof options === 'object' ? options?.reason : undefined;
+    const notes = typeof options === 'object' ? options?.notes : undefined;
+    const body = {};
+    if (copyId) body.copyId = copyId;
+    if (reason) body.reason = reason;
+    if (notes) body.notes = notes;
+    if (!body.copyId) {
+      console.warn('createMobileRenewal called without copyId. Backend requires copyId.');
+    }
+    const res = await this.makeApiCall(url, { method: 'POST', body: JSON.stringify(body) });
+    return res;
+  }
+
+  /**
+   * Mobile API: Create lost/damage report for a specific book (per user)
+   * POST /api/mobile/users/[id]/books/[bookId]/report
+   */
+  static async reportMobileIncident(userId, bookId, { type, description } = {}) {
+    if (!userId) throw new Error('Missing userId');
+    if (!bookId) throw new Error('Missing bookId');
+    const url = `${this.API_BASE}/api/mobile/users/${encodeURIComponent(userId)}/books/${encodeURIComponent(bookId)}/report`;
+    const payload = {
+      reportType: type, // 'LOST' | 'DAMAGED'
+      description
+    };
+    const res = await this.makeApiCall(url, { method: 'POST', body: JSON.stringify(payload) });
+    return res;
+  }
+
+  // Fetch renewal requests for current user (type=renewals)
+  static async getUserRenewalRequests(userId = null) {
+    try {
+      const currentUserId = userId || await this.getCurrentUserId();
+      if (!currentUserId) throw new Error('User ID is required');
+      const primaryUrl = `${this.API_BASE}/api/mobile/users/${encodeURIComponent(currentUserId)}/requests?type=renewals`;
+      const primaryRes = await this.makeApiCall(primaryUrl, { method: 'GET' });
+      // Normalize and return if we have rows
+      const primaryRows = Array.isArray(primaryRes)
+        ? primaryRes
+        : (primaryRes?.data?.renewals || primaryRes?.renewals || []);
+      if (primaryRows && primaryRows.length >= 1) {
+        return primaryRes;
+      }
+      // Fallback: admin list (ALL) then filter by userId
+      const fallbackUrl = `${this.API_BASE}/api/renewal-requests?status=ALL`;
+      const fallbackRes = await this.makeApiCall(fallbackUrl, { method: 'GET' }).catch(() => ({ success: false }));
+      const allRows = Array.isArray(fallbackRes)
+        ? fallbackRes
+        : (Array.isArray(fallbackRes?.data) ? fallbackRes.data : (fallbackRes?.data?.renewals || fallbackRes?.renewals || []));
+      const mine = (allRows || []).filter(r => {
+        const rowUserId = r.userId || r.user_id || r.userid || r.user;
+        return String(rowUserId) === String(currentUserId);
+      });
+      return { success: true, data: { renewals: mine } };
+    } catch (err) {
+      const message = String(err?.message || '').toUpperCase();
+      // If endpoint is missing or server returned HTML/CORS issue, fall back gracefully
+      if (message.includes('HTML') || message.includes('ENDPOINT') || message.includes('CORS')) {
+        return { success: true, data: { renewals: [] }, error: { type: 'ENDPOINT_MISSING' } };
+      }
+      console.error('Error fetching renewal requests:', err);
+      throw err;
+    }
+  }
+
+  // Send OTP for password change
+  static async sendPasswordChangeOTP(userEmail = null) {
+    try {
+      console.log('Sending OTP for password change...');
+      
+      let email = userEmail;
+      
+      // If no email provided, try to get it from user data
+      if (!email) {
+        const userData = await this.getCurrentUser();
+        email = userData?.email;
+      }
+      
+      // If still no email, try to get it from the backend user profile
+      if (!email) {
+        try {
+          const profileResponse = await this.getUserProfile();
+          if (profileResponse.success && profileResponse.data?.email) {
+            email = profileResponse.data.email;
+          }
+        } catch (profileErr) {
+          console.log('Could not fetch user profile:', profileErr);
+        }
+      }
+      
+      if (!email) {
+        throw new Error('User email not found. Please provide your email address.');
+      }
+
+      const res = await fetch(`${this.API_BASE}/api/auth/send-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email
+        })
+      });
+
+      const data = await this.handleApiResponse(res, 'send-otp');
+      console.log('✅ OTP sent successfully to:', email);
+      
+      return {
+        success: true,
+        message: data.message || `OTP sent to ${email}`,
+        data: { ...data, email }
+      };
+    } catch (err) {
+      console.error('❌ Error sending OTP:', err);
+      return {
+        success: false,
+        message: err.message || 'Failed to send OTP'
+      };
+    }
+  }
+
+  // Verify OTP and change password
+  static async verifyOTPAndChangePassword(otp, newPassword, userEmail = null) {
+    try {
+      console.log('Verifying OTP and changing password...');
+      
+      let email = userEmail;
+      
+      // If no email provided, try to get it from user data
+      if (!email) {
+        const userData = await this.getCurrentUser();
+        email = userData?.email;
+      }
+      
+      // If still no email, try to get it from the backend user profile
+      if (!email) {
+        try {
+          const profileResponse = await this.getUserProfile();
+          if (profileResponse.success && profileResponse.data?.email) {
+            email = profileResponse.data.email;
+          }
+        } catch (profileErr) {
+          console.log('Could not fetch user profile:', profileErr);
+        }
+      }
+      
+      if (!email) {
+        throw new Error('User email not found. Please provide your email address.');
+      }
+
+      const res = await fetch(`${this.API_BASE}/api/auth/verify-otp-reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email,
+          otp,
+          newPassword,
+          confirmPassword: newPassword
+        })
+      });
+
+      const data = await this.handleApiResponse(res, 'verify-otp-reset');
+      console.log('✅ Password changed successfully');
+      
+      return {
+        success: true,
+        message: data.message || 'Password changed successfully',
+        data
+      };
+    } catch (err) {
+      console.error('❌ Error changing password:', err);
+      return {
+        success: false,
+        message: err.message || 'Failed to change password'
+      };
+    }
+  }
+
+  // Legacy change password method (keeping for backward compatibility)
   static async changePassword(currentPassword, newPassword) {
     try {
       console.log('Attempting to change password...');

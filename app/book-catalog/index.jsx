@@ -1,3 +1,5 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -5,7 +7,6 @@ import {
     Alert,
     Dimensions,
     FlatList,
-    Image,
     RefreshControl,
     StyleSheet,
     Text,
@@ -13,6 +14,7 @@ import {
     TouchableOpacity,
     View
 } from 'react-native';
+import BorrowRequestModal from '../../components/BorrowRequestModal';
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import { COURSE_PROGRAMS, SHELF_LOCATIONS } from '../../constants/BookConstants';
@@ -28,139 +30,349 @@ const BookCatalogScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
   const [sidebarVisible, setSidebarVisible] = useState(false);
   
   // Enhanced filter states
   const [selectedShelfLocation, setSelectedShelfLocation] = useState(null);
   const [selectedCourseProgram, setSelectedCourseProgram] = useState(null);
   // Collapsible filter sections
-  const [locationCollapsed, setLocationCollapsed] = useState(false);
-  const [programCollapsed, setProgramCollapsed] = useState(false);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [locationCollapsed, setLocationCollapsed] = useState(true);
+  const [programCollapsed, setProgramCollapsed] = useState(true);
+  
+  // Modal states
+  const [showBorrowModal, setShowBorrowModal] = useState(false);
+  const [selectedBook, setSelectedBook] = useState(null);
+  
+  // Pending copy IDs tracking using Set
+  const [pendingCopyIds, setPendingCopyIds] = useState(new Set());
+  
   const router = useRouter();
 
+
+  // Load pending copy IDs from storage and server
+  const loadPendingCopyIds = async () => {
+    try {
+      // First load from storage
+      const storageKey = 'pending_copy_ids_global';
+      const stored = await AsyncStorage.getItem(storageKey);
+      if (stored) {
+        const copyIds = JSON.parse(stored);
+        console.log('📋 Loaded global pending copy IDs from storage:', copyIds);
+        setPendingCopyIds(new Set(copyIds));
+      }
+
+      // Try to load from server and handle missing copyId
+      console.log('🔍 Loading pending requests from server');
+      try {
+      const response = await ApiService.getBorrowRequests('pending');
+      
+      if (response.success && response.data && response.data.requests) {
+          console.log('📋 Server pending requests:', response.data.requests);
+          
+          if (response.data.requests.length > 0) {
+            console.log('⚠️ Found pending requests but copyId is missing from server response');
+            console.log('⚠️ This indicates a backend API issue - copyId should be included in /api/borrow-requests');
+            console.log('⚠️ Frontend will rely on client state until backend is fixed');
+            
+            // For now, we can't determine which specific copies are pending
+            // This is a temporary workaround until the backend includes copyId
+            console.log('⚠️ TEMPORARY: Cannot determine specific pending copies due to missing copyId');
+          }
+      }
+    } catch (error) {
+        console.log('⚠️ Could not load pending requests from server:', error.message);
+        console.log('⚠️ Relying on client state only');
+      }
+    } catch (error) {
+      console.error('❌ Error loading pending copy IDs:', error);
+    }
+  };
+
+  // Save pending copy IDs to storage
+  const savePendingCopyIds = async (copyIds) => {
+    try {
+      const storageKey = 'pending_copy_ids_global';
+      await AsyncStorage.setItem(storageKey, JSON.stringify(Array.from(copyIds)));
+      console.log('📋 Saved global pending copy IDs:', Array.from(copyIds));
+    } catch (error) {
+      console.error('❌ Error saving pending copy IDs:', error);
+    }
+  };
+
   // Load books from backend
-  const loadBooks = async (page = 1, isRefresh = false) => {
+  const loadBooks = async (isRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
       
-      // Get ALL books at once - borrowers need to see everything available
-      const response = await ApiService.getBooks({ 
-        limit: 100, // Get all books - no pagination needed
+      console.log('Loading books with search:', search, 'filterBy:', filterBy);
+      
+      // Use the new available books API for the book catalog
+      const response = await ApiService.getAvailableBooks({ 
+        limit: 1000, // Get all available books
         search: search || undefined,
         filterBy: filterBy || undefined,
-        forceRefresh: isRefresh // Force refresh when pulling to refresh
+        forceRefresh: isRefresh
       });
       
       if (response.success && response.data && response.data.books) {
         const allBooks = response.data.books;
         console.log(`📖 Loaded ${allBooks.length} books into catalog`);
         
-        // Always set all books - no pagination for borrowers
+        // Debug: Log first book structure to understand data format
+        if (allBooks.length > 0) {
+          console.log('📋 Sample book structure:', {
+            id: allBooks[0].id,
+            title: allBooks[0].title,
+            author: allBooks[0].author,
+            subject: allBooks[0].subject,
+            shelfLocationPrefix: allBooks[0].shelfLocationPrefix,
+            location: allBooks[0].location,
+            courseProgram: allBooks[0].courseProgram,
+            program: allBooks[0].program,
+            availableCopies: allBooks[0].availableCopies,
+            totalCopies: allBooks[0].totalCopies
+          });
+        }
+        
         setBooks(allBooks);
-        setHasMore(false); // No more pages needed
-        setCurrentPage(1);
+        // Apply client-side filtering for enhanced filters
+        applyClientSideFilters(allBooks);
       } else {
         console.log('❌ No books data in response');
+        console.log('📋 Response structure:', response);
+        
+        // Check if it's a CORS error
+        if (response.error && response.error.type === 'CORS_ERROR') {
+          console.log('🚨 CORS error detected, using fallback data');
+          // Don't set error, just use empty results and let user know
+          setBooks([]);
+          setFilteredBooks([]);
+        } else {
+          setError('No books found. The backend may be experiencing issues or no books are available.');
         setBooks([]);
+        setFilteredBooks([]);
+        }
       }
     } catch (err) {
       console.error('❌ Error loading books:', err);
-      setError(err.message);
+      
+      // Provide specific error messages based on error type
+      if (err.message.includes('CORS') || err.message.includes('Failed to fetch')) {
+        console.log('🚨 CORS/Network error detected, using fallback approach');
+        // Don't set error for CORS issues, just use empty results
+        setBooks([]);
+        setFilteredBooks([]);
+      } else if (err.message.includes('Network')) {
+        setError('Network connection issue. Please check your internet connection and try again.');
+        setBooks([]);
+        setFilteredBooks([]);
+      } else {
+        setError(`Unable to load books: ${err.message}`);
       setBooks([]);
+      setFilteredBooks([]);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  // Apply client-side filtering for enhanced filters
+  const applyClientSideFilters = (booksToFilter = books) => {
+    let filtered = [...booksToFilter];
+    
+    // Apply shelf location filter
+    if (selectedShelfLocation) {
+      console.log('Applying shelf location filter:', selectedShelfLocation);
+      filtered = filtered.filter(book => {
+        // Check various possible field names for shelf location
+        const location = book.shelfLocation || book.shelfLocationPrefix || book.location || book.locationPrefix;
+        console.log('Book location:', location, 'Selected:', selectedShelfLocation);
+        
+        // Map filter selection to actual shelf location patterns
+        let locationKeywords = [];
+        switch (selectedShelfLocation) {
+          case 'Fi-college':
+            locationKeywords = ['College', 'college'];
+            break;
+          case 'Fi/senH':
+            locationKeywords = ['senH', 'Senior High', 'senior high'];
+            break;
+          case 'Fi/HS':
+            locationKeywords = ['HS', 'High School', 'high school'];
+            break;
+          case 'Fi/E':
+            locationKeywords = ['E-', 'Elementary', 'elementary'];
+            break;
+          case 'Fi/K':
+            locationKeywords = ['K', 'Kindergarten', 'kindergarten'];
+            break;
+          default:
+            return true; // Show all if no specific pattern
+        }
+        
+        // Check if the book's location matches any of the keywords
+        const matches = location && locationKeywords.some(keyword => 
+          location.toLowerCase().includes(keyword.toLowerCase())
+        );
+        console.log('Location keywords:', locationKeywords, 'Book location:', location, 'Matches:', matches);
+        return matches;
+      });
+      console.log('After shelf location filter:', filtered.length, 'books');
+    }
+    
+    // Apply course program filter (if available)
+    if (selectedCourseProgram) {
+      console.log('Applying course program filter:', selectedCourseProgram);
+      filtered = filtered.filter(book => {
+        // Check various possible field names for course program
+        const program = book.courseProgram || book.program || book.academicProgram;
+        console.log('Book program:', program, 'Selected:', selectedCourseProgram);
+        return program === selectedCourseProgram;
+      });
+      console.log('After course program filter:', filtered.length, 'books');
+    }
+    
+    setFilteredBooks(filtered);
+  };
+
   // Search and filter books
   const handleSearch = () => {
-    setCurrentPage(1);
-    loadBooks(1, true);
+    console.log('Performing search:', search, 'filterBy:', filterBy);
+    
+    // If we have books loaded, try client-side search first
+    if (books.length > 0 && search.trim()) {
+      console.log('Performing client-side search on', books.length, 'books');
+      const filtered = books.filter(book => {
+        const searchTerm = search.toLowerCase().trim();
+        const searchField = book[filterBy] || book.title || '';
+        return String(searchField).toLowerCase().includes(searchTerm);
+      });
+      
+      console.log('Client-side search found', filtered.length, 'books');
+      setFilteredBooks(filtered);
+      
+      // Also try server-side search in background
+    loadBooks(true);
+    } else {
+      // No books loaded or no search term, load from server
+      loadBooks(true);
+    }
   };
 
   // Refresh books
   const onRefresh = () => {
     setRefreshing(true);
-    setCurrentPage(1);
-    loadBooks(1, true);
+    loadBooks(true);
   };
 
-  // Handle book reservation/request actions
-  const handleRequestBorrow = async (bookId) => {
+  // Handle book click - navigate to book details to select copy
+  const handleBookClick = (bookId) => {
+    console.log('Book clicked:', bookId);
+    router.push({ 
+      pathname: '/book-catalog/details', 
+      params: { id: bookId } 
+    });
+  };
+
+  // Handle successful borrow request submission
+  const handleBorrowRequestSuccess = (requestData) => {
+    console.log('Borrow request submitted successfully:', requestData);
+    console.log('📋 Request data copyId:', requestData.copyId);
+    console.log('📋 Current global pending copy IDs before update:', Array.from(pendingCopyIds));
+    
+    // Add the copy ID to pending set
+    if (requestData.copyId) {
+      console.log('📋 Adding copy ID to global pending set:', requestData.copyId);
+      setPendingCopyIds(prev => {
+        const newSet = new Set(prev);
+        newSet.add(requestData.copyId);
+        console.log('📋 Updated global pending copy IDs:', Array.from(newSet));
+        savePendingCopyIds(newSet);
+        return newSet;
+      });
+    } else {
+      console.log('❌ No copyId in request data for global tracking');
+      console.log('❌ Request data:', requestData);
+    }
+    
+    // Optionally refresh the book list or show success message
+    Alert.alert(
+      'Request Submitted!',
+      'Your borrow request has been submitted successfully. You will be notified when it\'s approved.',
+      [
+        { text: 'View My Requests', onPress: () => router.push('/borrowing/my-requests') }
+      ]
+    );
+  };
+
+  // Handle book reservation for unavailable books
+  const handleReserveBook = async (bookId) => {
     try {
-      console.log('Requesting to borrow book:', bookId);
+      console.log('Reserving book:', bookId);
       
-      // Get current user ID
       const userId = await ApiService.getCurrentUserId();
       if (!userId) {
-        Alert.alert('Error', 'You must be logged in to request books');
+        Alert.alert('Error', 'You must be logged in to reserve books');
         return;
       }
 
-      // Calculate expected return date (3 days from now)
-      const expectedReturnDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+      const book = books.find(b => b.id === bookId);
+      if (!book) {
+        Alert.alert('Error', 'Book not found');
+        return;
+      }
 
-      const response = await fetch(
-        `${ApiService.API_BASE}/api/mobile/users/${userId}/books/${bookId}/reserve`,
-        {
-          method: "POST",
-          headers: await ApiService.getAuthHeaders(),
-          body: JSON.stringify({
-            expectedReturnDate: expectedReturnDate.toISOString(),
-            initialCondition: "EXCELLENT",
-            conditionNotes: "Requested via mobile app",
-          }),
-        }
-      );
+      // Check if all copies are borrowed (available for reservation)
+      if (book.availableCopies === 0 && book.totalCopies > 0) {
+        const expectedReturnDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-      if (response.ok) {
-        Alert.alert(
-          'Success', 
-          'Book reservation request submitted successfully!',
-          [
-            { text: 'View My Reservations', onPress: () => router.push('/borrowing/my-requests') },
-            { text: 'Continue Browsing', onPress: () => {} }
-          ]
+        const response = await fetch(
+          `${ApiService.API_BASE}/api/mobile/users/${userId}/books/${bookId}/reserve`,
+          {
+            method: "POST",
+            headers: await ApiService.getAuthHeaders(),
+            body: JSON.stringify({
+              expectedReturnDate: expectedReturnDate.toISOString()
+            }),
+          }
         );
+
+        if (response.ok) {
+          Alert.alert(
+            'Reservation Successful!', 
+            'Book has been reserved successfully. You will be notified when it becomes available.',
+            [
+              { text: 'View My Reservations', onPress: () => router.push('/borrowing/my-requests') }
+            ]
+          );
+        } else {
+          const error = await response.json();
+          Alert.alert('Reservation Failed', error.message || 'Failed to reserve book. Please try again.');
+        }
       } else {
-        const error = await response.json();
-        Alert.alert('Error', error.message || 'Failed to submit reservation request');
+        Alert.alert(
+          'Book Unavailable', 
+          'This book is currently unavailable for reservation. All copies may be damaged, lost, or under maintenance.',
+          [{ text: 'OK' }]
+        );
       }
     } catch (error) {
-      console.error('Error requesting book:', error);
-      Alert.alert('Error', 'Failed to submit reservation request. Please try again.');
+      console.error('Error reserving book:', error);
+      Alert.alert('Error', 'Failed to reserve book. Please try again.');
     }
-  };
-
-  const handleReserveBook = async (bookId) => {
-    // Same implementation as handleRequestBorrow for now
-    // Both actions create a reservation request
-    await handleRequestBorrow(bookId);
   };
 
   // Initial load
   useEffect(() => {
     const initializeScreen = async () => {
-      // Load auth token from storage
       await ApiService.loadAuthToken();
-      
-              // Clear cache to force fresh load
         ApiService.clearCatalogCache();
-        console.log('Cache cleared - fetching fresh data from backend');
-      
-      // Test backend connectivity
-      const backendReachable = await ApiService.testBackendConnectivity();
-      console.log('Backend reachable:', backendReachable);
-      
-      // Test if book catalog endpoint is working
-      const catalogWorking = await ApiService.testBookCatalog();
-      console.log('Book catalog endpoint working:', catalogWorking);
-      
-      // Load books
-      loadBooks(1, true);
+      await Promise.all([
+        loadBooks(true),
+        loadPendingCopyIds()
+      ]);
     };
     
     initializeScreen();
@@ -169,152 +381,197 @@ const BookCatalogScreen = () => {
   // Handle filter change
   const handleFilterChange = (newFilter) => {
     setFilterBy(newFilter);
-    setCurrentPage(1);
-    loadBooks(1, true);
+    // Trigger search with new filter
+    loadBooks(true);
   };
 
   // Handle shelf location filter
   const handleShelfLocationFilter = (locationId) => {
-    setSelectedShelfLocation(selectedShelfLocation === locationId ? null : locationId);
+    const newLocation = selectedShelfLocation === locationId ? null : locationId;
+    setSelectedShelfLocation(newLocation);
   };
 
   // Handle course program filter
   const handleCourseProgramFilter = (programId) => {
-    setSelectedCourseProgram(selectedCourseProgram === programId ? null : programId);
+    const newProgram = selectedCourseProgram === programId ? null : programId;
+    setSelectedCourseProgram(newProgram);
   };
 
-  // Apply enhanced filters
-  const applyEnhancedFilters = () => {
-    let filtered = [...books];
-    
-    if (selectedShelfLocation) {
-      filtered = filtered.filter(book => book.shelfLocationPrefix === selectedShelfLocation);
-    }
-    
-    if (selectedCourseProgram) {
-      filtered = filtered.filter(book => book.courseProgram === selectedCourseProgram);
-    }
-    
-    setFilteredBooks(filtered);
+  // Clear all filters
+  const clearAllFilters = () => {
+    setSelectedShelfLocation(null);
+    setSelectedCourseProgram(null);
+    setSearch('');
+    setFilterBy('title');
   };
 
-  // Apply filters whenever books or filter states change
+  // Test API connection
+  const testApiConnection = async () => {
+    try {
+      console.log('🧪 Testing API connection...');
+      const response = await fetch(`${ApiService.API_BASE}/api/books?limit=1`, {
+        method: 'GET',
+        headers: await ApiService.getAuthHeaders(),
+      });
+      
+      console.log('API Response Status:', response.status);
+      console.log('API Response Headers:', response.headers);
+      
+      const text = await response.text();
+      console.log('API Response Text:', text.substring(0, 500));
+      
+      if (response.ok) {
+        Alert.alert('API Test', `API is working! Status: ${response.status}`);
+      } else {
+        Alert.alert('API Test', `API returned error: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('API Test Error:', error);
+      Alert.alert('API Test', `Connection failed: ${error.message}`);
+    }
+  };
+
+  // Apply enhanced filters whenever they change
   useEffect(() => {
-    applyEnhancedFilters();
-  }, [books, selectedShelfLocation, selectedCourseProgram]);
+    applyClientSideFilters();
+  }, [selectedShelfLocation, selectedCourseProgram]);
+
+  // Real-time search as user types
+  useEffect(() => {
+    if (search.trim() && books.length > 0) {
+      console.log('Real-time search for:', search);
+      const filtered = books.filter(book => {
+        const searchTerm = search.toLowerCase().trim();
+        const searchField = book[filterBy] || book.title || '';
+        return String(searchField).toLowerCase().includes(searchTerm);
+      });
+      setFilteredBooks(filtered);
+    } else if (books.length > 0) {
+      // If no search term, show all books
+      setFilteredBooks(books);
+    }
+  }, [search, filterBy, books]);
 
   // Render book item
   const renderBookItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.bookCard}
-      onPress={() => {
-        console.log('=== Book Tap Debug ===');
-        console.log('Tapped book:', item.title);
-        console.log('Book ID:', item.id);
-        console.log('Book ID type:', typeof item.id);
-        router.push({ 
-          pathname: '/book-catalog/details', 
-          params: { id: item.id } 
-        });
-      }}
-    >
-      {/* Book cover */}
-      <View style={styles.bookCover}>
-        {item.coverImage ? (
-          <Image source={{ uri: item.coverImage }} style={styles.coverImage} />
-        ) : (
-          <View style={styles.placeholderCover}>
-            <Text style={styles.placeholderText}>📚</Text>
-          </View>
-        )}
+    <View style={styles.bookCard}>
+      <View style={styles.bookHeader}>
+        <View style={styles.bookTitleContainer}>
+          <Text style={styles.bookTitle} numberOfLines={2}>
+            {item.title}
+          </Text>
+          <Text style={styles.bookAuthor}>by {item.author}</Text>
+        </View>
+        
+        {/* Availability Badge */}
+        <View style={[styles.availabilityBadge, item.availableCopies > 0 ? styles.availableBadge : styles.unavailableBadge]}>
+          <MaterialCommunityIcons 
+            name={item.availableCopies > 0 ? 'check-circle' : 'close-circle'} 
+            size={12} 
+            color={item.availableCopies > 0 ? '#10b981' : '#ef4444'} 
+          />
+          <Text style={[styles.availabilityBadgeText, { color: item.availableCopies > 0 ? '#10b981' : '#ef4444' }]}>
+            {item.availableCopies > 0 ? 'Available' : 'Unavailable'}
+          </Text>
+        </View>
       </View>
 
-      {/* Book info */}
-      <View style={styles.bookInfo}>
-        <Text style={styles.bookTitle} numberOfLines={2}>
-          {item.title}
-        </Text>
-        <Text style={styles.bookAuthor} numberOfLines={1}>
-          {item.author}
-        </Text>
-        <Text style={styles.bookSubject} numberOfLines={1}>
-          {item.subject}
-        </Text>
+      <View style={styles.bookMeta}>
+        {(item.category || item.subject) && (
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryBadgeText}>{item.category || item.subject}</Text>
+          </View>
+        )}
         
-        {/* Enhanced Book Information */}
-        <View style={styles.enhancedInfo}>
-          {/* Shelf Location Badge */}
-          <View style={styles.shelfLocationBadge}>
-            <Text style={styles.shelfLocationText}>
-              {item.shelfLocationPrefix || 'Fi'}
+        {/* DDC Classification Badge */}
+        {(item.ddcClassification || item.ddc) && (
+          <View style={styles.ddcBadge}>
+            <Text style={styles.ddcBadgeText}>
+              DDC: {item.ddcClassification || item.ddc}
             </Text>
           </View>
+        )}
+        
+        {/* Shelf Location Badge */}
+        <View style={styles.shelfLocationBadge}>
+          <Text style={styles.shelfLocationText}>
+            {item.shelfLocation || item.shelfLocationPrefix || 'Main'}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.bookDetails}>
+        <View style={styles.bookDetailItem}>
+          <MaterialCommunityIcons name="bookshelf" size={14} color="#6b7280" />
+          <Text style={styles.bookDetailText}>Shelf: {item.shelfLocation || item.shelfLocationPrefix || 'N/A'}</Text>
+        </View>
+        <View style={styles.bookDetailItem}>
+          <MaterialCommunityIcons name="tag" size={14} color="#6b7280" />
+          <Text style={styles.bookDetailText}>DDC: {item.ddcClassification || item.ddc || '—'}</Text>
+        </View>
+        <View style={styles.bookDetailItem}>
+          <MaterialCommunityIcons name="book-open" size={14} color="#6b7280" />
+          <Text style={styles.bookDetailText}>{item.category || item.subject || '—'}</Text>
+        </View>
+      </View>
+
+      {/* Course Program */}
+      {item.courseProgram && (
+        <View style={styles.courseProgramSection}>
+          <MaterialCommunityIcons name="school" size={14} color="#7c3aed" />
+          <Text style={styles.courseProgramText}>Program: {item.courseProgram}</Text>
+        </View>
+      )}
+
+      {/* Availability Info */}
+      <View style={styles.availabilityInfo}>
+        <Text style={styles.availabilityInfoText}>
+          {item.availableCopies > 0 
+            ? `${item.availableCopies} of ${item.totalCopies || 0} copies available`
+            : `All ${item.totalCopies || 0} copies unavailable`
+          }
+        </Text>
+      </View>
+
+      {/* Action Button */}
+      <View style={styles.bookActions}>
+        {(() => {
+          // Check for pending requests - only copy-specific
+          const hasPendingCopy = item.copies && item.copies.some(copy => 
+            pendingCopyIds.has(copy.id)
+          );
           
-          {/* Borrowable Status Badge */}
-          <View style={[
-            styles.borrowableBadge,
-            (item.isBorrowable !== false) ? styles.borrowableBadgeActive : styles.borrowableBadgeReference
-          ]}>
-            <Text style={[
-              styles.borrowableText,
-              (item.isBorrowable !== false) ? styles.borrowableTextActive : styles.borrowableTextReference
-            ]}>
-              {(item.isBorrowable !== false) ? 'Borrowable' : 'Reference Only'}
-            </Text>
-          </View>
-        </View>
-        
-        {/* Course Program */}
-        {item.courseProgram && (
-          <Text style={styles.courseProgramText}>
-            Program: {item.courseProgram}
-          </Text>
-        )}
-        
-        {/* Full Call Number */}
-        <Text style={styles.callNumberText}>
-          {item.shelfLocationPrefix || 'Fi'} {item.ddc || ''} {item.callNumber || ''} {item.year || ''}
-        </Text>
-        
-        {/* Availability badge */}
-        <View style={[
-          styles.availabilityBadge,
-          (item.availableCopies > 0) ? styles.availableBadge : styles.unavailableBadge
-        ]}>
-          <Text style={[
-            styles.availabilityText,
-            (item.availableCopies > 0) ? styles.availableText : styles.unavailableText
-          ]}>
-            {item.availableCopies > 0 
-              ? `${item.availableCopies} copy${item.availableCopies === 1 ? '' : 'ies'} available`
-              : 'No copies available'
-            }
-          </Text>
-        </View>
-        
-        {/* Total copies info */}
-        <Text style={styles.copiesInfo}>
-          Total copies: {item.totalCopies || 0}
-        </Text>
-        
-        {/* Action Buttons - Request/Reserve instead of direct borrow */}
-        <View style={styles.actionButtons}>
-          <TouchableOpacity
-            style={styles.requestButton}
-            onPress={() => handleRequestBorrow(item.id)}
-          >
-            <Text style={styles.requestButtonText}>Request to Borrow</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.reserveButton}
-            onPress={() => handleReserveBook(item.id)}
-          >
-            <Text style={styles.reserveButtonText}>Reserve Book</Text>
-          </TouchableOpacity>
-        </View>
+          const hasAnyPending = hasPendingCopy;
+          
+          return hasAnyPending ? (
+            <TouchableOpacity
+              style={[styles.actionButton, styles.pendingActionButton]}
+              onPress={() => {
+                Alert.alert(
+                  'Request Already Submitted',
+                  'You have already submitted a borrow request for this book. Please wait for approval or check your requests.',
+                  [
+                    { text: 'OK' },
+                    { text: 'View My Requests', onPress: () => router.push('/borrowing/my-requests') }
+                  ]
+                );
+              }}
+            >
+              <MaterialCommunityIcons name="clock-outline" size={16} color="#f59e0b" />
+              <Text style={[styles.actionButtonText, styles.pendingActionButtonText]}>Request Pending</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.actionButton, styles.primaryActionButton]}
+              onPress={() => handleBookClick(item.id)}
+            >
+              <MaterialCommunityIcons name="eye" size={16} color="#ffffff" />
+              <Text style={[styles.actionButtonText, styles.primaryActionButtonText]}>View Details</Text>
+            </TouchableOpacity>
+          );
+        })()}
       </View>
-    </TouchableOpacity>
+    </View>
   );
 
   // Render footer (loading more)
@@ -331,16 +588,38 @@ const BookCatalogScreen = () => {
   // Render empty state
   const renderEmptyState = () => {
     if (loading) return null;
+    
+    const hasActiveFilters = selectedShelfLocation || selectedCourseProgram || search.trim();
+    const hasBooks = books.length > 0;
+    
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.emptyIcon}>📚</Text>
-        <Text style={styles.emptyTitle}>No books found</Text>
+        <Text style={styles.emptyTitle}>
+          {hasActiveFilters ? 'No books found' : hasBooks ? 'No books match your criteria' : 'No books available'}
+        </Text>
         <Text style={styles.emptySubtitle}>
           {search.trim() 
-            ? `No books match "${search}"` 
-            : 'Try adjusting your search or filters'
+            ? `No books match "${search}" in ${filterBy}` 
+            : hasActiveFilters
+            ? 'Try adjusting your filters or search terms'
+            : hasBooks
+            ? 'Try different search terms or clear filters'
+            : 'The library catalog is currently empty or unavailable'
           }
         </Text>
+        
+        {hasActiveFilters && (
+          <TouchableOpacity style={styles.clearFiltersButton} onPress={clearAllFilters}>
+            <Text style={styles.clearFiltersText}>🗑️ Clear All Filters</Text>
+          </TouchableOpacity>
+        )}
+        
+        {!hasActiveFilters && !hasBooks && (
+          <TouchableOpacity style={styles.retryButton} onPress={() => loadBooks(true)}>
+            <Text style={styles.retryButtonText}>🔄 Retry</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   };
@@ -372,71 +651,148 @@ const BookCatalogScreen = () => {
 
       {/* Search Section */}
       <View style={styles.searchSection}>
-        <View style={styles.searchContainer}>
+        {/* Main Search Bar */}
+        <View style={styles.mainSearchContainer}>
+          <View style={styles.searchInputContainer}>
+            <MaterialCommunityIcons name="magnify" size={20} color="#64748b" style={styles.searchIcon} />
         <TextInput
-          style={styles.searchInput}
-            placeholder="Search for books..."
+              style={styles.mainSearchInput}
+              placeholder="Search books by title, author, category, DDC, ISBN..."
           value={search}
           onChangeText={setSearch}
-            onSubmitEditing={handleSearch}
             returnKeyType="search"
+              placeholderTextColor="#94a3b8"
+              autoCorrect={false}
+              autoCapitalize="none"
           />
+            {search.length > 0 && (
           <TouchableOpacity 
-            style={styles.searchButton} 
-            onPress={handleSearch}
+                style={styles.clearSearchButton} 
+                onPress={() => setSearch('')}
           >
-            <Text style={styles.searchButtonText}>🔍</Text>
+                <MaterialCommunityIcons name="close-circle" size={20} color="#94a3b8" />
           </TouchableOpacity>
+            )}
+          </View>
         </View>
 
-        {/* Filter Buttons */}
-        <View style={styles.filterContainer}>
-          {['title', 'author', 'subject', 'ddc'].map(key => (
+        {/* Filter Toggle Button */}
             <TouchableOpacity
-              key={key}
+          style={styles.filterToggleButton}
+          onPress={() => setShowAdvancedFilters(!showAdvancedFilters)}
+        >
+          <MaterialCommunityIcons 
+            name={showAdvancedFilters ? "chevron-up" : "chevron-down"} 
+            size={16} 
+            color="#475569" 
+          />
+          <Text style={styles.filterToggleText}>
+            {showAdvancedFilters ? 'Hide Advanced Filters' : 'Show Advanced Filters'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Search Results Counter */}
+        {search.trim() && (
+          <View style={styles.searchResultsCounter}>
+            <Text style={styles.searchResultsText}>
+              {filteredBooks.length} book{filteredBooks.length !== 1 ? 's' : ''} found for "{search}"
+            </Text>
+          </View>
+        )}
+
+        {/* Advanced Filters Panel */}
+        {showAdvancedFilters && (
+          <View style={styles.filtersPanel}>
+            {/* Search Type Filter */}
+            <View style={styles.filterGroup}>
+              <Text style={styles.filterGroupTitle}>Search By</Text>
+              <View style={styles.filterOptions}>
+                {[
+                  { key: 'title', label: 'Title', icon: 'book-open' },
+                  { key: 'author', label: 'Author', icon: 'account-edit' },
+                  { key: 'category', label: 'Category', icon: 'tag' },
+                  { key: 'ddcClassification', label: 'DDC', icon: 'format-list-numbered' },
+                  { key: 'isbn', label: 'ISBN', icon: 'barcode' },
+                  { key: 'publisher', label: 'Publisher', icon: 'office-building' }
+                ].map(option => (
+                  <TouchableOpacity
+                    key={option.key}
               style={[
-                styles.filterButton, 
-                filterBy === key && styles.filterButtonActive
+                      styles.filterOption,
+                      filterBy === option.key && styles.filterOptionActive
               ]}
-              onPress={() => handleFilterChange(key)}
+                    onPress={() => handleFilterChange(option.key)}
             >
+                    <MaterialCommunityIcons 
+                      name={option.icon} 
+                      size={16} 
+                      color={filterBy === option.key ? '#ffffff' : '#6b7280'} 
+                      style={styles.filterOptionIcon}
+                    />
               <Text style={[
-                styles.filterText, 
-                filterBy === key && styles.filterTextActive
+                      styles.filterOptionText,
+                      filterBy === option.key && styles.filterOptionTextActive
               ]}>
-                {key.charAt(0).toUpperCase() + key.slice(1)}
+                      {option.label}
               </Text>
             </TouchableOpacity>
           ))}
+              </View>
         </View>
         
-        {/* Enhanced Filter Options */}
-        <View style={styles.enhancedFilterContainer}>
           {/* Shelf Location Filter */}
-          <View style={styles.filterRow}>
-            <View style={styles.filterHeader}>
-              <Text style={styles.filterLabel}>Location:</Text>
+            <View style={styles.filterGroup}>
+              <View style={styles.filterGroupHeader}>
+                <Text style={styles.filterGroupTitle}>Shelf Location</Text>
               <TouchableOpacity
                 onPress={() => setLocationCollapsed(!locationCollapsed)}
-                style={styles.collapseButton}
+                  style={styles.collapseToggle}
               >
-                <Text style={styles.collapseButtonText}>{locationCollapsed ? 'Show' : 'Hide'}</Text>
+                  <Text style={styles.collapseToggleText}>
+                    {locationCollapsed ? 'Show' : 'Hide'}
+                  </Text>
               </TouchableOpacity>
             </View>
             {!locationCollapsed && (
               <View style={styles.filterOptions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.filterOption,
+                      !selectedShelfLocation && styles.filterOptionActive
+                    ]}
+                    onPress={() => handleShelfLocationFilter(null)}
+                  >
+                    <MaterialCommunityIcons 
+                      name="map-marker" 
+                      size={16} 
+                      color={!selectedShelfLocation ? '#ffffff' : '#6b7280'} 
+                      style={styles.filterOptionIcon}
+                    />
+                    <Text style={[
+                      styles.filterOptionText,
+                      !selectedShelfLocation && styles.filterOptionTextActive
+                    ]}>
+                      All Locations
+                    </Text>
+                  </TouchableOpacity>
                 {SHELF_LOCATIONS.map(location => (
                   <TouchableOpacity
                     key={location.id}
                     style={[
-                      styles.enhancedFilterButton,
-                      selectedShelfLocation === location.id && styles.enhancedFilterButtonActive
+                        styles.filterOption,
+                        selectedShelfLocation === location.id && styles.filterOptionActive
                     ]}
                     onPress={() => handleShelfLocationFilter(location.id)}
                   >
+                      <MaterialCommunityIcons 
+                        name="bookshelf" 
+                        size={16} 
+                        color={selectedShelfLocation === location.id ? '#ffffff' : '#6b7280'} 
+                        style={styles.filterOptionIcon}
+                      />
                     <Text style={[
-                      styles.enhancedFilterText,
-                      selectedShelfLocation === location.id && styles.enhancedFilterTextActive
+                        styles.filterOptionText,
+                        selectedShelfLocation === location.id && styles.filterOptionTextActive
                     ]}>
                       {location.name}
                     </Text>
@@ -447,28 +803,36 @@ const BookCatalogScreen = () => {
           </View>
           
           {/* Course Program Filter */}
-          <View style={styles.filterRow}>
-            <View style={styles.filterHeader}>
-              <Text style={styles.filterLabel}>Program:</Text>
+            <View style={styles.filterGroup}>
+              <View style={styles.filterGroupHeader}>
+                <Text style={styles.filterGroupTitle}>Course Program</Text>
               <TouchableOpacity
                 onPress={() => setProgramCollapsed(!programCollapsed)}
-                style={styles.collapseButton}
+                  style={styles.collapseToggle}
               >
-                <Text style={styles.collapseButtonText}>{programCollapsed ? 'Show' : 'Hide'}</Text>
+                  <Text style={styles.collapseToggleText}>
+                    {programCollapsed ? 'Show' : 'Hide'}
+                  </Text>
               </TouchableOpacity>
             </View>
             {!programCollapsed && (
               <View style={styles.filterOptions}>
                 <TouchableOpacity
                   style={[
-                    styles.enhancedFilterButton,
-                    !selectedCourseProgram && styles.enhancedFilterButtonActive
+                      styles.filterOption,
+                      !selectedCourseProgram && styles.filterOptionActive
                   ]}
                   onPress={() => handleCourseProgramFilter(null)}
                 >
+                    <MaterialCommunityIcons 
+                      name="school" 
+                      size={16} 
+                      color={!selectedCourseProgram ? '#ffffff' : '#6b7280'} 
+                      style={styles.filterOptionIcon}
+                    />
                   <Text style={[
-                    styles.enhancedFilterText,
-                    !selectedCourseProgram && styles.enhancedFilterTextActive
+                      styles.filterOptionText,
+                      !selectedCourseProgram && styles.filterOptionTextActive
                   ]}>
                     All Programs
                   </Text>
@@ -477,14 +841,20 @@ const BookCatalogScreen = () => {
                   <TouchableOpacity
                     key={program.id}
                     style={[
-                      styles.enhancedFilterButton,
-                      selectedCourseProgram === program.id && styles.enhancedFilterButtonActive
+                        styles.filterOption,
+                        selectedCourseProgram === program.id && styles.filterOptionActive
                     ]}
                     onPress={() => handleCourseProgramFilter(program.id)}
                   >
+                      <MaterialCommunityIcons 
+                        name="book-education" 
+                        size={16} 
+                        color={selectedCourseProgram === program.id ? '#ffffff' : '#6b7280'} 
+                        style={styles.filterOptionIcon}
+                      />
                     <Text style={[
-                      styles.enhancedFilterText,
-                      selectedCourseProgram === program.id && styles.enhancedFilterTextActive
+                        styles.filterOptionText,
+                        selectedCourseProgram === program.id && styles.filterOptionTextActive
                     ]}>
                       {program.name}
                     </Text>
@@ -493,30 +863,73 @@ const BookCatalogScreen = () => {
               </View>
             )}
           </View>
+
+            {/* Clear All Filters */}
+            {(selectedShelfLocation || selectedCourseProgram || search.trim()) && (
+              <TouchableOpacity 
+                style={styles.clearAllButton} 
+                onPress={clearAllFilters}
+              >
+                <Text style={styles.clearAllButtonText}>🗑️ Clear All Filters</Text>
+              </TouchableOpacity>
+            )}
         </View>
+        )}
       </View>
 
       {/* Error Message */}
       {error && (
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>⚠️ {error}</Text>
+          <Text style={styles.errorIcon}>⚠️</Text>
+          <Text style={styles.errorTitle}>Book Catalog Error</Text>
+          <Text style={styles.errorText}>{error}</Text>
+          
+          {/* Show specific instructions for CORS errors */}
+          {error.includes('CORS') && (
+            <View style={styles.corsHelpContainer}>
+              <Text style={styles.corsHelpTitle}>🔧 Backend Team Action Required:</Text>
+              <Text style={styles.corsHelpText}>
+                1. Configure CORS to allow localhost:8081{'\n'}
+                2. See BACKEND_CRITICAL_FIXES.md for details{'\n'}
+                3. Test with the "Test API" button below
+              </Text>
+            </View>
+          )}
+          
+          <View style={styles.errorButtons}>
           <TouchableOpacity
             style={styles.retryButton} 
-            onPress={() => loadBooks(1, true)}
-          >
-            <Text style={styles.retryButtonText}>Retry</Text>
+              onPress={() => loadBooks(true)}
+            >
+              <Text style={styles.retryButtonText}>🔄 Retry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.debugButton} 
+              onPress={testApiConnection}
+            >
+              <Text style={styles.debugButtonText}>🧪 Test API</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.clearButton} 
+              onPress={() => {
+                setError(null);
+                setSearch('');
+                setFilterBy('title');
+                setSelectedShelfLocation(null);
+                setSelectedCourseProgram(null);
+                loadBooks(true);
+              }}
+            >
+              <Text style={styles.clearButtonText}>🧹 Clear All</Text>
           </TouchableOpacity>
+          </View>
         </View>
       )}
 
       {/* Books List */}
       <FlatList
         data={filteredBooks}
-        keyExtractor={(item, index) => {
-          // Use a more stable key that won't cause re-rendering issues
-          const key = `book_${item.id || 'unknown'}_${index}`;
-          return key;
-        }}
+        keyExtractor={(item, index) => `book_${item.id || 'unknown'}_${index}`}
         renderItem={renderBookItem}
         ListFooterComponent={renderFooter}
         ListEmptyComponent={renderEmptyState}
@@ -529,12 +942,18 @@ const BookCatalogScreen = () => {
         }
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContainer}
-        // Add these props to improve performance and debugging
-        removeClippedSubviews={false}
-        maxToRenderPerBatch={10}
-        windowSize={10}
-        initialNumToRender={10}
-        onEndReachedThreshold={0.5}
+        keyboardShouldPersistTaps="handled"
+      />
+
+      {/* Borrow Request Modal */}
+      <BorrowRequestModal
+        visible={showBorrowModal}
+        onClose={() => {
+          setShowBorrowModal(false);
+          setSelectedBook(null);
+        }}
+        book={selectedBook}
+        onSuccess={handleBorrowRequestSuccess}
       />
     </View>
   );
@@ -574,54 +993,197 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0'
   },
-  searchContainer: {
-    flexDirection: 'row',
+  
+  // Main Search Container
+  mainSearchContainer: {
     marginBottom: 16
   },
-  searchInput: { 
-    flex: 1,
-    borderWidth: 1, 
-    borderColor: '#d1d5db', 
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
     borderRadius: 12, 
-    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  searchIcon: {
+    marginRight: 12
+  },
+  mainSearchInput: {
+    flex: 1,
     fontSize: 16,
-    backgroundColor: '#ffffff'
+    color: '#1e293b',
+    paddingVertical: 8
   },
   searchButton: {
     backgroundColor: '#3b82f6',
-    padding: 16,
-    borderRadius: 12,
-    marginLeft: 8,
-    justifyContent: 'center',
-    alignItems: 'center'
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginLeft: 12,
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
   },
   searchButtonText: {
-    fontSize: 18,
-    color: '#ffffff'
-  },
-  filterContainer: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between' 
-  },
-  filterButton: { 
-    paddingVertical: 8, 
-    paddingHorizontal: 16, 
-    borderRadius: 20, 
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0'
-  },
-  filterButtonActive: { 
-    backgroundColor: '#3b82f6',
-    borderColor: '#3b82f6'
-  },
-  filterText: { 
-    color: '#64748b',
+    color: '#ffffff',
     fontSize: 14,
+    fontWeight: '600'
+  },
+  clearSearchButton: {
+    padding: 4,
+    marginLeft: 8,
+  },
+  searchResultsCounter: {
+    backgroundColor: '#f0f9ff',
+    borderColor: '#0ea5e9',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    alignItems: 'center',
+  },
+  searchResultsText: {
+    color: '#0369a1',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  // Filter Toggle
+  filterToggleButton: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  filterToggleText: {
+    color: '#475569',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6
+  },
+
+  // Filters Panel
+  filtersPanel: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    marginBottom: 16,
+  },
+
+  // Filter Groups
+  filterGroup: {
+    marginBottom: 20
+  },
+  filterGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12
+  },
+  filterGroupTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#374151'
+  },
+  collapseToggle: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4
+  },
+  collapseToggleText: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+
+  // Filter Options
+  filterOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10
+  },
+  filterOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  filterOptionActive: {
+    backgroundColor: '#3b82f6',
+    borderColor: '#3b82f6',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  filterOptionIcon: {
+    marginRight: 8
+  },
+  filterOptionText: {
+    fontSize: 14,
+    color: '#6b7280',
     fontWeight: '500'
   },
-  filterTextActive: { 
+  filterOptionTextActive: {
     color: '#ffffff',
+    fontWeight: '600'
+  },
+
+  // Clear All Button
+  clearAllButton: {
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    marginTop: 8
+  },
+  clearAllButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
     fontWeight: '600'
   },
 
@@ -630,16 +1192,52 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef2f2',
     borderColor: '#fecaca',
     borderWidth: 1,
-    borderRadius: 8,
-    padding: 16,
+    borderRadius: 12,
+    padding: 20,
     margin: 20,
     alignItems: 'center'
+  },
+  errorIcon: {
+    fontSize: 32,
+    marginBottom: 8
+  },
+  errorTitle: {
+    color: '#dc2626',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 8,
+    textAlign: 'center'
   },
   errorText: {
     color: '#dc2626',
     fontSize: 16,
-    marginBottom: 12,
-    textAlign: 'center'
+    marginBottom: 16,
+    textAlign: 'center',
+    lineHeight: 24
+  },
+  corsHelpContainer: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    width: '100%'
+  },
+  corsHelpTitle: {
+    color: '#92400e',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 8
+  },
+  corsHelpText: {
+    color: '#b45309',
+    fontSize: 12,
+    lineHeight: 18
+  },
+  errorButtons: {
+    flexDirection: 'row',
+    gap: 12
   },
   retryButton: {
     backgroundColor: '#dc2626',
@@ -649,6 +1247,27 @@ const styles = StyleSheet.create({
   },
   retryButtonText: {
     color: '#ffffff',
+    fontWeight: '600'
+  },
+  debugButton: {
+    backgroundColor: '#6b7280',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 6
+  },
+  debugButtonText: {
+    color: '#ffffff',
+    fontWeight: '600'
+  },
+  clearButton: {
+    backgroundColor: '#6b7280',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8
+  },
+  clearButtonText: {
+    color: 'white',
+    fontSize: 14,
     fontWeight: '600'
   },
 
@@ -703,106 +1322,142 @@ const styles = StyleSheet.create({
   bookCard: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
+    padding: 20,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.05,
     shadowRadius: 8,
-    elevation: 3,
-    flexDirection: 'row', // Added for cover and info layout
-    alignItems: 'center' // Align items for cover and info
+    elevation: 2,
   },
-  bookCover: {
-    width: 80,
-    height: 120,
-    borderRadius: 12,
-    marginRight: 16,
-    backgroundColor: '#f1f5f9',
-    justifyContent: 'center',
-    alignItems: 'center'
+  bookHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
   },
-  coverImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 12
-  },
-  placeholderCover: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f1f5f9'
-  },
-  placeholderText: {
-    fontSize: 40,
-    color: '#64748b'
-  },
-  bookInfo: {
+  bookTitleContainer: {
     flex: 1,
-    paddingVertical: 10
+    marginRight: 12,
   },
-  bookTitle: { 
-    fontWeight: '700', 
+  bookTitle: {
     fontSize: 18,
+    fontWeight: '700',
     color: '#1e293b',
     marginBottom: 4,
-    lineHeight: 24
+    lineHeight: 24,
   },
-  bookAuthor: { 
-    color: '#64748b',
-    fontSize: 16,
-    marginBottom: 4
-  },
-  bookSubject: {
-    color: '#64748b',
+  bookAuthor: {
     fontSize: 14,
-    marginBottom: 12
+    color: '#64748b',
+    fontWeight: '500',
   },
   bookMeta: {
     flexDirection: 'row',
-    justifyContent: 'space-between'
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  bookLocation: {
-    color: '#64748b',
-    fontSize: 12
+  categoryBadge: {
+    backgroundColor: '#eef2ff',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginRight: 8,
   },
-  bookDdc: {
-    color: '#64748b',
-    fontSize: 12
+  categoryBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#3730a3',
   },
-  bookStatus: {
-    alignItems: 'flex-end'
+  ddcBadge: {
+    backgroundColor: '#f0f9ff',
+    borderColor: '#0ea5e9',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginRight: 8,
+  },
+  ddcBadgeText: {
+    color: '#0369a1',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  shelfLocationBadge: {
+    backgroundColor: '#e0f2fe',
+    borderColor: '#0288d1',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  shelfLocationText: {
+    color: '#0277bd',
+    fontSize: 11,
+    fontWeight: '600',
   },
   availabilityBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-    marginBottom: 8
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
   },
   availableBadge: {
     backgroundColor: '#dcfce7',
-    borderColor: '#bbf7d0',
-    borderWidth: 1
   },
   unavailableBadge: {
-    backgroundColor: '#fef2f2',
-    borderColor: '#fecaca',
-    borderWidth: 1
+    backgroundColor: '#fee2e2',
   },
-  availabilityText: {
+  availabilityBadgeText: {
     fontSize: 12,
-    fontWeight: '600'
+    fontWeight: '600',
+    marginLeft: 4,
   },
-  availableText: {
-    color: '#065f46'
+  bookDetails: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  unavailableText: {
-    color: '#991b1b'
+  bookDetailItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    minWidth: '30%',
   },
-  copiesInfo: {
+  bookDetailText: {
     fontSize: 12,
     color: '#64748b',
-    marginTop: 4
+    marginLeft: 6,
+    fontWeight: '500',
+  },
+  courseProgramSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  courseProgramText: {
+    fontSize: 12,
+    color: '#7c3aed',
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  availabilityInfo: {
+    marginBottom: 16,
+  },
+  availabilityInfoText: {
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '500',
   },
   footer: {
     padding: 20,
@@ -833,7 +1488,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#64748b',
     textAlign: 'center',
-    lineHeight: 24
+    lineHeight: 24,
+    marginBottom: 16
+  },
+  clearFiltersButton: {
+    backgroundColor: '#3b82f6',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8
+  },
+  clearFiltersText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600'
   },
 
   // Enhanced Book Information Styles
@@ -898,35 +1565,55 @@ const styles = StyleSheet.create({
     marginBottom: 8
   },
 
-  // Enhanced Filter Styles
-  enhancedFilterContainer: {
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0'
+  // Advanced Filter Toggle
+  advancedFilterToggle: {
+    marginBottom: 8
   },
-  filterRow: {
-    marginBottom: 12
+  advancedFilterButton: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center'
   },
-  filterLabel: {
+  advancedFilterButtonText: {
+    color: '#475569',
     fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 6
+    fontWeight: '600'
   },
-  filterHeader: {
+
+  // Advanced Filter Container
+  advancedFilterContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0'
+  },
+  filterSection: {
+    marginBottom: 16
+  },
+  filterSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6
+    marginBottom: 8
+  },
+  filterSectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151'
   },
   collapseButton: {
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,
-    backgroundColor: '#f1f5f9',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#e2e8f0'
+    borderColor: '#d1d5db'
   },
   collapseButtonText: {
     color: '#475569',
@@ -940,9 +1627,9 @@ const styles = StyleSheet.create({
   },
   enhancedFilterButton: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderRadius: 16,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#d1d5db'
   },
@@ -959,40 +1646,55 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600'
   },
+  clearAllFiltersButton: {
+    backgroundColor: '#ef4444',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8
+  },
+  clearAllFiltersText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600'
+  },
 
-  // Action Buttons
-  actionButtons: {
+  // Book Actions
+  bookActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 12,
-    gap: 8
   },
-  requestButton: {
-    flex: 1,
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+  },
+  primaryActionButton: {
     backgroundColor: '#3b82f6',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center'
+    borderColor: '#3b82f6',
   },
-  requestButtonText: {
-    color: '#ffffff',
+  pendingActionButton: {
+    backgroundColor: '#f59e0b',
+    borderColor: '#f59e0b',
+  },
+  actionButtonText: {
     fontSize: 14,
-    fontWeight: '600'
+    fontWeight: '600',
+    color: '#3b82f6',
+    marginLeft: 6,
   },
-  reserveButton: {
-    flex: 1,
-    backgroundColor: '#10b981',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center'
-  },
-  reserveButtonText: {
+  primaryActionButtonText: {
     color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600'
-  }
+  },
+  pendingActionButtonText: {
+    color: '#ffffff',
+  },
 });
 
 export default BookCatalogScreen;

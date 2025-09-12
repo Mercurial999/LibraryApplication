@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -113,54 +114,88 @@ const FinesScreen = () => {
           </View>
         ) : (
           <>
-            <View style={styles.card}>
-              <Text style={styles.label}>Total Outstanding</Text>
-              <Text style={styles.amount}>₱{finesData.totalOutstanding.toFixed(2)}</Text>
-              <Text style={styles.subLabel}>
-                {finesData.unpaidCount} {finesData.unpaidCount === 1 ? 'fine' : 'fines'} unpaid
-              </Text>
+            {/* Main Summary Card */}
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryHeader}>
+                <MaterialCommunityIcons name="currency-usd" size={24} color="#dc2626" />
+                <Text style={styles.summaryTitle}>Total Outstanding</Text>
+              </View>
+              <View style={styles.summaryContent}>
+                <Text style={styles.totalAmount}>₱{finesData.totalOutstanding.toFixed(2)}</Text>
+                <Text style={styles.summarySubtext}>
+                  {finesData.unpaidCount} {finesData.unpaidCount === 1 ? 'fine' : 'fines'} unpaid
+                </Text>
+              </View>
             </View>
 
+            {/* Statistics Cards */}
             <View style={styles.statsRow}>
               <View style={styles.statCard}>
+                <MaterialCommunityIcons name="alert-circle" size={20} color="#dc2626" />
                 <Text style={styles.statNumber}>{finesData.unpaidCount}</Text>
                 <Text style={styles.statLabel}>Unpaid</Text>
               </View>
               <View style={styles.statCard}>
+                <MaterialCommunityIcons name="check-circle" size={20} color="#059669" />
                 <Text style={styles.statNumber}>{finesData.paidCount}</Text>
                 <Text style={styles.statLabel}>Paid</Text>
               </View>
               <View style={styles.statCard}>
+                <MaterialCommunityIcons name="file-document" size={20} color="#3b82f6" />
                 <Text style={styles.statNumber}>{finesData.totalFines}</Text>
                 <Text style={styles.statLabel}>Total</Text>
               </View>
             </View>
 
-            <TouchableOpacity 
-              style={styles.row} 
-              onPress={() => router.push('/fines/outstanding')}
-            >
-              <Text style={styles.link}>📋 Fine Details</Text>
-              <Text style={styles.arrow}>→</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.row} 
-              onPress={() => router.push('/fines/payment-history')}
-            >
-              <Text style={styles.link}>📊 Payment History</Text>
-              <Text style={styles.arrow}>→</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.row} onPress={handleDisputeFine}>
-              <Text style={styles.link}>⚠️ Dispute a Fine</Text>
-              <Text style={styles.arrow}>→</Text>
-            </TouchableOpacity>
+            {/* Action Cards */}
+            <View style={styles.actionsSection}>
+              <TouchableOpacity 
+                style={styles.actionCard} 
+                onPress={() => router.push('/fines/outstanding')}
+              >
+                <View style={styles.actionContent}>
+                  <MaterialCommunityIcons name="file-document-outline" size={24} color="#3b82f6" />
+                  <View style={styles.actionText}>
+                    <Text style={styles.actionTitle}>Fine Details</Text>
+                    <Text style={styles.actionSubtitle}>View detailed breakdown of your fines</Text>
+                  </View>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={24} color="#94a3b8" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.actionCard} 
+                onPress={() => router.push('/fines/payment-history')}
+              >
+                <View style={styles.actionContent}>
+                  <MaterialCommunityIcons name="chart-line" size={24} color="#3b82f6" />
+                  <View style={styles.actionText}>
+                    <Text style={styles.actionTitle}>Payment History</Text>
+                    <Text style={styles.actionSubtitle}>Track your payment records</Text>
+                  </View>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={24} color="#94a3b8" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.actionCard} onPress={handleDisputeFine}>
+                <View style={styles.actionContent}>
+                  <MaterialCommunityIcons name="alert-circle-outline" size={24} color="#d97706" />
+                  <View style={styles.actionText}>
+                    <Text style={styles.actionTitle}>Dispute a Fine</Text>
+                    <Text style={styles.actionSubtitle}>Contact library staff for disputes</Text>
+                  </View>
+                </View>
+                <MaterialCommunityIcons name="chevron-right" size={24} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
 
             {/* Overdue Transactions Section */}
             {finesData.overdueTransactions && finesData.overdueTransactions.length > 0 && (
               <View style={styles.overdueSection}>
-                <Text style={styles.sectionTitle}>📚 Overdue Books</Text>
+                <View style={styles.sectionHeader}>
+                  <MaterialCommunityIcons name="book-alert" size={20} color="#dc2626" />
+                  <Text style={styles.sectionTitle}>Overdue Books</Text>
+                </View>
                 <Text style={styles.sectionSubtitle}>
                   Books overdue after 3-day grace period
                 </Text>
@@ -172,23 +207,40 @@ const FinesScreen = () => {
                   
                   return (
                     <View key={transaction.id || index} style={styles.overdueCard}>
-                      <Text style={styles.bookTitle}>
-                        {transaction.book?.title || 'Unknown Book'}
-                      </Text>
-                      <Text style={styles.bookAuthor}>
-                        by {transaction.book?.author || 'Unknown Author'}
-                      </Text>
-                      <View style={styles.overdueDetails}>
-                        <Text style={styles.dueDate}>
-                          Due: {dueDate.toLocaleDateString()}
-                        </Text>
-                        <Text style={styles.daysOverdue}>
-                          {daysOverdue > 0 ? `${daysOverdue} day${daysOverdue > 1 ? 's' : ''} overdue` : 'Within grace period'}
-                        </Text>
-                        {daysOverdue > 0 && (
-                          <Text style={styles.fineAmount}>
-                            Fine: ₱{fineAmount.toFixed(2)}
+                      <View style={styles.bookHeader}>
+                        <View style={styles.bookInfo}>
+                          <Text style={styles.bookTitle} numberOfLines={2}>
+                            {transaction.book?.title || 'Unknown Book'}
                           </Text>
+                          <Text style={styles.bookAuthor}>
+                            by {transaction.book?.author || 'Unknown Author'}
+                          </Text>
+                        </View>
+                        <View style={[styles.statusBadge, { backgroundColor: '#dc2626' }]}>
+                          <Text style={styles.statusText}>Overdue</Text>
+                        </View>
+                      </View>
+                      
+                      <View style={styles.overdueDetails}>
+                        <View style={styles.detailItem}>
+                          <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
+                          <Text style={styles.detailText}>
+                            Due: {dueDate.toLocaleDateString()}
+                          </Text>
+                        </View>
+                        <View style={styles.detailItem}>
+                          <MaterialCommunityIcons name="clock-alert" size={16} color="#dc2626" />
+                          <Text style={[styles.detailText, { color: '#dc2626' }]}>
+                            {daysOverdue > 0 ? `${daysOverdue} day${daysOverdue > 1 ? 's' : ''} overdue` : 'Within grace period'}
+                          </Text>
+                        </View>
+                        {daysOverdue > 0 && (
+                          <View style={styles.detailItem}>
+                            <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
+                            <Text style={[styles.detailText, { color: '#dc2626' }]}>
+                              Fine: ₱{fineAmount.toFixed(2)}
+                            </Text>
+                          </View>
                         )}
                       </View>
                     </View>
@@ -199,7 +251,10 @@ const FinesScreen = () => {
 
             {finesData.unpaidCount > 0 && (
               <View style={styles.warningCard}>
-                <Text style={styles.warningTitle}>⚠️ Payment Reminder</Text>
+                <View style={styles.warningHeader}>
+                  <MaterialCommunityIcons name="alert-circle" size={20} color="#d97706" />
+                  <Text style={styles.warningTitle}>Payment Reminder</Text>
+                </View>
                 <Text style={styles.warningText}>
                   You have {finesData.unpaidCount} unpaid fine{finesData.unpaidCount > 1 ? 's' : ''}. 
                   Please settle your fines to avoid restrictions on borrowing privileges.
@@ -220,8 +275,10 @@ const styles = StyleSheet.create({
   },
   content: { 
     flex: 1, 
-    padding: 24 
+    padding: 20 
   },
+  
+  // Loading States
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -249,177 +306,260 @@ const styles = StyleSheet.create({
     backgroundColor: '#3b82f6',
     paddingHorizontal: 24,
     paddingVertical: 12,
-    borderRadius: 8
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   retryButtonText: {
     color: '#ffffff',
     fontWeight: '600'
   },
-  card: { 
-    backgroundColor: '#ffffff', 
-    padding: 24, 
-    borderRadius: 12, 
-    marginBottom: 20, 
-    alignItems: 'center',
+
+  // Summary Card
+  summaryCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 3
+    elevation: 3,
   },
-  label: { 
-    fontSize: 16, 
-    color: '#64748b', 
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  summaryTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginLeft: 8,
+  },
+  summaryContent: {
+    alignItems: 'center',
+  },
+  totalAmount: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#dc2626',
     marginBottom: 8,
-    fontWeight: '500'
   },
-  amount: { 
-    fontSize: 36, 
-    fontWeight: 'bold', 
-    color: '#ef4444', 
-    marginBottom: 4 
+  summarySubtext: {
+    fontSize: 14,
+    color: '#64748b',
+    fontWeight: '500',
   },
-  subLabel: { 
-    fontSize: 14, 
-    color: '#94a3b8',
-    fontWeight: '500'
-  },
+
+  // Statistics Cards
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 20
+    marginBottom: 16,
+    gap: 8,
   },
   statCard: {
     flex: 1,
     backgroundColor: '#ffffff',
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 12,
     alignItems: 'center',
-    marginHorizontal: 4,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
-    elevation: 1
+    elevation: 1,
   },
   statNumber: {
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '700',
     color: '#1e293b',
-    marginBottom: 4
+    marginTop: 8,
+    marginBottom: 4,
   },
   statLabel: {
     fontSize: 12,
     color: '#64748b',
-    fontWeight: '500'
+    fontWeight: '500',
   },
-  row: { 
+
+  // Action Cards
+  actionsSection: {
+    marginBottom: 16,
+  },
+  actionCard: {
     backgroundColor: '#ffffff',
-    padding: 20, 
-    borderBottomWidth: 1, 
-    borderColor: '#e2e8f0',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
     marginBottom: 8,
-    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
-    elevation: 1
+    elevation: 1,
   },
-  link: { 
-    color: '#3b82f6', 
+  actionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  actionText: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  actionTitle: {
+    fontSize: 16,
     fontWeight: '600',
-    fontSize: 16
+    color: '#1e293b',
+    marginBottom: 4,
   },
-  arrow: {
-    color: '#94a3b8',
-    fontSize: 18,
-    fontWeight: 'bold'
+  actionSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
+    lineHeight: 20,
   },
+
+  // Warning Card
   warningCard: {
     backgroundColor: '#fef3c7',
-    borderColor: '#f59e0b',
+    borderColor: '#d97706',
     borderWidth: 1,
     padding: 16,
-    borderRadius: 8,
-    marginTop: 16
+    borderRadius: 12,
+    marginTop: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  warningHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   warningTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
     color: '#92400e',
-    marginBottom: 8
+    marginLeft: 8,
   },
   warningText: {
     fontSize: 14,
     color: '#92400e',
-    lineHeight: 20
+    lineHeight: 20,
   },
 
-  // Overdue Section Styles
+  // Overdue Section
   overdueSection: {
     marginTop: 24,
-    padding: 20,
+    padding: 16,
     backgroundColor: '#fef2f2',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#fecaca'
+    borderColor: '#fecaca',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#991b1b',
-    marginBottom: 8
+    marginLeft: 8,
   },
   sectionSubtitle: {
     fontSize: 14,
     color: '#dc2626',
     marginBottom: 16,
-    fontStyle: 'italic'
+    fontStyle: 'italic',
   },
+
+  // Overdue Cards
   overdueCard: {
     backgroundColor: '#ffffff',
     padding: 16,
-    borderRadius: 8,
+    borderRadius: 12,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#fecaca'
+    borderColor: '#fecaca',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  bookHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  bookInfo: {
+    flex: 1,
+    marginRight: 12,
   },
   bookTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#1e293b',
-    marginBottom: 4
+    marginBottom: 4,
+    lineHeight: 20,
   },
   bookAuthor: {
     fontSize: 14,
     color: '#64748b',
-    marginBottom: 8,
-    fontStyle: 'italic'
+    fontStyle: 'italic',
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  statusText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
   },
   overdueDetails: {
+    gap: 8,
+  },
+  detailItem: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    flexWrap: 'wrap'
   },
-  dueDate: {
-    fontSize: 12,
-    color: '#6b7280'
-  },
-  daysOverdue: {
-    fontSize: 12,
-    color: '#dc2626',
-    fontWeight: '500'
-  },
-  fineAmount: {
+  detailText: {
     fontSize: 14,
-    color: '#dc2626',
-    fontWeight: '600'
-  }
+    color: '#64748b',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
 });
 
 export default FinesScreen;

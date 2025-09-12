@@ -5,16 +5,20 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <StatusBar style="auto" />
+      <StatusBar style="light" />
       <Stack 
         screenOptions={{
-          headerShown: false, // Hide the default header
-          gestureEnabled: true, // Enable swipe gestures for navigation
-          animation: 'slide_from_right', // Smooth navigation animation
-          contentStyle: { backgroundColor: '#f8fafc' }, // Default background color
-          headerStyle: { backgroundColor: '#ffffff' }, // Header background (if shown)
-          headerTintColor: '#1e293b', // Header text color (if shown)
-          headerTitleStyle: { fontWeight: '600' }, // Header title style (if shown)
+          headerShown: false,
+          gestureEnabled: true,
+          fullScreenGestureEnabled: true,
+          animation: 'slide_from_right',
+          animationTypeForReplace: 'push',
+          gestureDirection: 'horizontal',
+          detachPreviousScreen: false,
+          contentStyle: { backgroundColor: '#0f172a' },
+          headerStyle: { backgroundColor: 'rgba(30, 64, 175, 0.92)' },
+          headerTintColor: '#ffffff',
+          headerTitleStyle: { fontWeight: '600' },
         }}
       />
     </GestureHandlerRootView>

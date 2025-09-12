@@ -1,3 +1,4 @@
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
@@ -19,12 +20,17 @@ export default function NewBookRequestScreen() {
   const router = useRouter();
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [authorized, setAuthorized] = useState(false);
-  const [requestTitle, setRequestTitle] = useState('');
-  const [requestAuthor, setRequestAuthor] = useState('');
-  const [requestReason, setRequestReason] = useState('');
-  const [requestPriority, setRequestPriority] = useState('MEDIUM');
+  const [bookTitle, setBookTitle] = useState('');
+  const [author, setAuthor] = useState('');
+  const [isbn, setIsbn] = useState('');
+  const [publisher, setPublisher] = useState('');
+  const [edition, setEdition] = useState('');
+  const [estimatedPrice, setEstimatedPrice] = useState('');
+  const [justification, setJustification] = useState('');
+  const [priority, setPriority] = useState('MEDIUM');
   const [availableBooks, setAvailableBooks] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState({});
 
   // Check available books
   const checkAvailableBooks = async () => {
@@ -47,18 +53,21 @@ export default function NewBookRequestScreen() {
   const isBookAvailable = () => {
     return availableBooks.some(
       (book) =>
-        book.title.toLowerCase().includes(requestTitle.toLowerCase()) &&
-        book.author.toLowerCase().includes(requestAuthor.toLowerCase()) &&
+        book.title.toLowerCase().includes(bookTitle.toLowerCase()) &&
+        book.author.toLowerCase().includes(author.toLowerCase()) &&
         book.availableCopies > 0
     );
   };
 
   // Submit book request
   const handleSubmitRequest = async () => {
-    if (!requestTitle.trim() || !requestAuthor.trim() || !requestReason.trim()) {
-      Alert.alert('Error', 'Please fill in all required fields');
-      return;
-    }
+    const nextErrors = {};
+    if (!bookTitle.trim()) nextErrors.bookTitle = 'Book title is required';
+    if (!author.trim()) nextErrors.author = 'Author is required';
+    if (!publisher.trim()) nextErrors.publisher = 'Publisher is required';
+    if (!justification.trim()) nextErrors.justification = 'Justification is required';
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) return;
 
     // Check if book is already available
     if (isBookAvailable()) {
@@ -78,31 +87,43 @@ export default function NewBookRequestScreen() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${ApiService.API_BASE}/api/book-requests`, {
-        method: 'POST',
-        headers: await ApiService.getAuthHeaders(),
-        body: JSON.stringify({
-          title: requestTitle.trim(),
-          author: requestAuthor.trim(),
-          reason: requestReason.trim(),
-          priority: requestPriority,
-          requestDate: new Date().toISOString(),
-          status: 'PENDING',
-        }),
+      // Get current user data
+      const userData = await ApiService.getCurrentUser();
+      
+      const response = await ApiService.createBookRequest({
+        userId: userData.id,
+        bookTitle: bookTitle.trim(),
+        author: author.trim(),
+        isbn: isbn.trim() || undefined,
+        publisher: publisher.trim(),
+        edition: edition.trim() || undefined,
+        estimatedPrice: estimatedPrice ? parseFloat(estimatedPrice) : 0,
+        justification: justification.trim(),
+        priority: priority
       });
 
-      if (response.ok) {
-        Alert.alert(
-          'Request Submitted',
-          'Your book request has been submitted successfully. The librarian will review it.',
-          [{ text: 'OK', onPress: () => router.goBack() }]
-        );
+      if (response.success) {
+        // Check if it's a duplicate request
+        const responseMessage = response.data?.message || response.message || '';
+        if (responseMessage.includes('Duplicate')) {
+          Alert.alert(
+            'Duplicate Request',
+            'A similar request was recently submitted. Please wait before submitting another request for the same book.',
+            [{ text: 'OK' }]
+          );
+        } else {
+          Alert.alert(
+            'Request Submitted',
+            'Your book request has been submitted successfully. The librarian will review it.',
+            [{ text: 'OK', onPress: () => router.replace('/teacher-requests') }]
+          );
+        }
       } else {
-        const error = await response.json();
-        Alert.alert('Error', error.message || 'Failed to submit request');
+        Alert.alert('Error', response.message || 'Failed to submit request');
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to submit request. Please try again.');
+      console.error('Error submitting book request:', error);
+      Alert.alert('Error', error.message || 'Failed to submit request. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -140,6 +161,8 @@ export default function NewBookRequestScreen() {
         title="Request New Book"
         subtitle="For Teachers Only"
         onMenuPress={() => setSidebarVisible(true)}
+        showBackButton
+        onBackPress={() => router.replace('/teacher-requests')}
       />
       
       <Sidebar 
@@ -148,83 +171,155 @@ export default function NewBookRequestScreen() {
         currentRoute="/teacher-requests/new"
       />
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Request New Book</Text>
-        <Text style={styles.subtitle}>For Teachers Only</Text>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.formContainer}>
+          <Text style={styles.title}>Request New Book</Text>
+          <Text style={styles.subtitle}>Request books to be added to the library</Text>
 
-        <TextInput 
-          style={styles.input} 
-          placeholder="Book Title *" 
-          value={requestTitle} 
-          onChangeText={setRequestTitle} 
-        />
-        
-        <TextInput 
-          style={styles.input} 
-          placeholder="Author *" 
-          value={requestAuthor} 
-          onChangeText={setRequestAuthor} 
-        />
-        
-        <TextInput 
-          style={[styles.input, styles.textArea]} 
-          placeholder="Reason for Request *" 
-          value={requestReason} 
-          onChangeText={setRequestReason} 
-          multiline 
-          numberOfLines={4}
-        />
+          {/* Required Information Section */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <MaterialCommunityIcons name="book-open-variant" size={20} color="#3b82f6" />
+              <Text style={styles.sectionTitle}>Required Information</Text>
+            </View>
+            
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Book Title <Text style={styles.required}>*</Text></Text>
+              <TextInput 
+                style={[styles.input, errors.bookTitle && styles.inputError]} 
+                placeholder="Enter book title"
+                value={bookTitle} 
+                onChangeText={(t) => { setBookTitle(t); if (errors.bookTitle) setErrors(p=>({ ...p, bookTitle: undefined })); }} 
+              />
+              {errors.bookTitle && <Text style={styles.errorText}>{errors.bookTitle}</Text>}
 
-        <View style={styles.priorityContainer}>
-          <Text style={styles.label}>Priority:</Text>
+              <Text style={styles.fieldLabel}>Author <Text style={styles.required}>*</Text></Text>
+              <TextInput 
+                style={[styles.input, errors.author && styles.inputError]} 
+                placeholder="Enter author name"
+                value={author} 
+                onChangeText={(t) => { setAuthor(t); if (errors.author) setErrors(p=>({ ...p, author: undefined })); }} 
+              />
+              {errors.author && <Text style={styles.errorText}>{errors.author}</Text>}
+
+              <Text style={styles.fieldLabel}>Publisher <Text style={styles.required}>*</Text></Text>
+              <TextInput 
+                style={[styles.input, errors.publisher && styles.inputError]} 
+                placeholder="Enter publisher name"
+                value={publisher} 
+                onChangeText={(t) => { setPublisher(t); if (errors.publisher) setErrors(p=>({ ...p, publisher: undefined })); }} 
+              />
+              {errors.publisher && <Text style={styles.errorText}>{errors.publisher}</Text>}
+
+              <Text style={styles.fieldLabel}>Justification <Text style={styles.required}>*</Text></Text>
+              <TextInput 
+                style={[styles.input, styles.textArea, errors.justification && styles.inputError]} 
+                placeholder="Explain why this book is needed for your course or research"
+                value={justification} 
+                onChangeText={(t) => { setJustification(t); if (errors.justification) setErrors(p=>({ ...p, justification: undefined })); }} 
+                multiline 
+                numberOfLines={4}
+              />
+              {errors.justification && <Text style={styles.errorText}>{errors.justification}</Text>}
+            </View>
+          </View>
+
+          {/* Optional Information Section */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <MaterialCommunityIcons name="information" size={20} color="#6b7280" />
+              <Text style={styles.sectionTitle}>Additional Information (Optional)</Text>
+            </View>
+            
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>ISBN</Text>
+              <TextInput 
+                style={styles.input} 
+                placeholder="978-1234567890"
+                value={isbn} 
+                onChangeText={setIsbn} 
+                keyboardType="numeric"
+              />
+
+              <Text style={styles.fieldLabel}>Edition</Text>
+              <TextInput 
+                style={styles.input} 
+                placeholder="1st Edition, 2nd Edition, etc."
+                value={edition} 
+                onChangeText={setEdition} 
+              />
+
+              <Text style={styles.fieldLabel}>Estimated Price (₱)</Text>
+              <TextInput 
+                style={styles.input} 
+                placeholder="0"
+                value={estimatedPrice} 
+                onChangeText={setEstimatedPrice} 
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
+
+          {/* Priority Section */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <MaterialCommunityIcons name="flag" size={20} color="#f59e0b" />
+              <Text style={styles.sectionTitle}>Priority Level</Text>
+            </View>
+            
+            <View style={styles.priorityContainer}>
+              {[
+                { value: 'LOW', label: 'Low', icon: 'check-circle-outline', color: '#10B981' },
+                { value: 'MEDIUM', label: 'Medium', icon: 'minus-circle', color: '#F59E0B' },
+                { value: 'HIGH', label: 'High', icon: 'alert-circle', color: '#DC2626' }
+              ].map(level => (
+                <TouchableOpacity
+                  key={level.value}
+                  style={[styles.priorityOption, priority === level.value && styles.priorityOptionActive]}
+                  onPress={() => setPriority(level.value)}
+                >
+                  <MaterialCommunityIcons 
+                    name={level.icon} 
+                    size={20} 
+                    color={priority === level.value ? '#ffffff' : level.color} 
+                    style={{ marginRight: 8 }} 
+                  />
+                  <Text style={[styles.priorityText, priority === level.value && styles.priorityTextActive]}>
+                    {level.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {isBookAvailable() && (
+            <View style={styles.availabilityWarning}>
+              <MaterialCommunityIcons name="alert-circle" size={20} color="#f59e0b" style={{ marginRight: 8 }} />
+              <Text style={styles.warningText}>
+                This book appears to be available in the library. Check the catalog first.
+              </Text>
+            </View>
+          )}
+
           <TouchableOpacity
-            style={[
-              styles.priorityButton,
-              requestPriority === 'HIGH' && styles.selectedPriority,
-            ]}
-            onPress={() => setRequestPriority('HIGH')}
+            style={[styles.submitButton, loading && styles.disabledButton]}
+            onPress={handleSubmitRequest}
+            disabled={loading}
           >
-            <Text style={styles.priorityText}>High</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.priorityButton,
-              requestPriority === 'MEDIUM' && styles.selectedPriority,
-            ]}
-            onPress={() => setRequestPriority('MEDIUM')}
-          >
-            <Text style={styles.priorityText}>Medium</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.priorityButton,
-              requestPriority === 'LOW' && styles.selectedPriority,
-            ]}
-            onPress={() => setRequestPriority('LOW')}
-          >
-            <Text style={styles.priorityText}>Low</Text>
+            {loading ? (
+              <ActivityIndicator color="#ffffff" size="small" />
+            ) : (
+              <>
+                <MaterialCommunityIcons name="send" size={20} color="#ffffff" style={{ marginRight: 8 }} />
+                <Text style={styles.submitButtonText}>Submit Request</Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
-
-        {isBookAvailable() && (
-          <View style={styles.availabilityWarning}>
-            <Text style={styles.warningText}>
-              ⚠️ This book appears to be available in the library. Check the catalog first.
-            </Text>
-          </View>
-        )}
-
-        <TouchableOpacity
-          style={[styles.submitButton, loading && styles.disabledButton]}
-          onPress={handleSubmitRequest}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#ffffff" size="small" />
-          ) : (
-            <Text style={styles.submitButtonText}>Submit Request</Text>
-          )}
-        </TouchableOpacity>
       </ScrollView>
     </View>
   );
@@ -235,14 +330,18 @@ const styles = StyleSheet.create({
     flex: 1, 
     backgroundColor: '#f8fafc' 
   },
+  scrollView: {
+    flex: 1
+  },
   scrollContent: { 
-    padding: 24, 
-    backgroundColor: '#fff', 
-    flexGrow: 1 
+    paddingBottom: 24
+  },
+  formContainer: {
+    padding: 20
   },
   title: { 
-    fontSize: 24, 
-    fontWeight: 'bold', 
+    fontSize: 28, 
+    fontWeight: '700', 
     marginBottom: 8, 
     textAlign: 'center',
     color: '#1e293b'
@@ -250,49 +349,96 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#64748b',
-    marginBottom: 24,
+    marginBottom: 32,
     textAlign: 'center'
   },
+  section: {
+    marginBottom: 24,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: '#e5e7eb'
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginLeft: 8
+  },
+  fieldGroup: {
+    marginTop: 8
+  },
+  fieldLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8
+  },
+  required: {
+    color: '#ef4444'
+  },
   input: { 
-    borderWidth: 2, 
-    borderColor: '#e5e7eb', 
-    borderRadius: 12, 
-    padding: 16, 
+    borderWidth: 1, 
+    borderColor: '#d1d5db', 
+    borderRadius: 8, 
+    padding: 12, 
     marginBottom: 16,
     fontSize: 16,
     backgroundColor: '#ffffff'
+  },
+  inputError: {
+    borderColor: '#ef4444'
+  },
+  errorText: {
+    color: '#ef4444',
+    marginTop: -12,
+    marginBottom: 8,
+    fontSize: 12
   },
   textArea: {
     minHeight: 100,
     textAlignVertical: 'top'
   },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 12
-  },
   priorityContainer: {
-    marginBottom: 20
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8
   },
-  priorityButton: {
-    backgroundColor: '#f3f4f6',
+  priorityOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 12,
     paddingHorizontal: 16,
+    marginHorizontal: 4,
     borderRadius: 8,
-    marginBottom: 8,
-    borderWidth: 2,
-    borderColor: '#e5e7eb'
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#ffffff'
   },
-  selectedPriority: {
+  priorityOptionActive: {
     backgroundColor: '#3b82f6',
     borderColor: '#3b82f6'
   },
   priorityText: {
-    fontSize: 16,
-    color: '#374151',
-    textAlign: 'center',
-    fontWeight: '500'
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151'
+  },
+  priorityTextActive: {
+    color: '#ffffff'
   },
   availabilityWarning: {
     backgroundColor: '#fef3c7',
@@ -300,23 +446,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 8,
     padding: 12,
-    marginBottom: 20
+    marginBottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   warningText: {
     color: '#92400e',
     fontSize: 14,
-    textAlign: 'center'
+    flex: 1
   },
   submitButton: { 
     backgroundColor: '#3b82f6', 
     paddingVertical: 16, 
+    paddingHorizontal: 24,
     borderRadius: 12, 
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
     shadowColor: '#3b82f6',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
-    elevation: 4
+    elevation: 4,
+    marginTop: 8
   },
   disabledButton: {
     backgroundColor: '#9ca3af'

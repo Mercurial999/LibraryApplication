@@ -18,7 +18,11 @@ const BookConditionsView = ({
   title = "Book Conditions", 
   submitText = "Reserve Book",
   book,
-  loading = false
+  loading = false,
+  onSelectCopy,
+  selectedCopyId,
+  filterBorrowedOnly = false,
+  selectedCopyOnly = false
 }) => {
   if (!book) return null;
 
@@ -53,42 +57,103 @@ const BookConditionsView = ({
             {/* Copy Information */}
             {book.copies && book.copies.length > 0 && (
               <View style={styles.copiesSection}>
-                <Text style={styles.sectionTitle}>Copy Details</Text>
-                {book.copies.map((copy, index) => (
-                  <View key={copy.id || index} style={styles.copyItem}>
+                {(() => {
+                  const baseCopies = filterBorrowedOnly ? book.copies.filter(c => (c.status === 'borrowed' || c.status === 'BORROWED')) : book.copies;
+                  const copies = selectedCopyOnly && selectedCopyId ? baseCopies.filter(c => c.id === selectedCopyId) : baseCopies;
+                  return (
+                    <>
+                      <Text style={styles.sectionTitle}>📚 Copy Details ({copies.length}{selectedCopyOnly ? ' selected' : ' total'})</Text>
+                      {copies.map((copy, index) => (
+                  <TouchableOpacity key={copy.id || index} style={[styles.copyItem, selectedCopyId && (selectedCopyId === copy.id) && styles.copyItemSelected]} activeOpacity={onSelectCopy ? 0.8 : 1} onPress={() => onSelectCopy && onSelectCopy(copy)}>
                     <View style={styles.copyHeader}>
-                      <Text style={styles.copyNumber}>Copy #{copy.copyNumber || (index + 1)}</Text>
+                      <Text style={styles.copyNumber}>
+                        {copy.copyNumber || `Copy ${index + 1}`}
+                      </Text>
                       <View style={[
                         styles.statusBadge,
-                        copy.status === 'AVAILABLE' ? styles.availableBadge :
-                        copy.status === 'BORROWED' ? styles.borrowedBadge :
-                        copy.status === 'RESERVED' ? styles.reservedBadge :
+                        copy.status === 'available' || copy.status === 'AVAILABLE' ? styles.availableBadge :
+                        copy.status === 'borrowed' || copy.status === 'BORROWED' ? styles.borrowedBadge :
+                        copy.status === 'reserved' || copy.status === 'RESERVED' ? styles.reservedBadge :
+                        copy.status === 'damaged' || copy.status === 'DAMAGED' ? styles.damagedBadge :
+                        copy.status === 'lost' || copy.status === 'LOST' ? styles.lostBadge :
                         styles.unavailableBadge
                       ]}>
-                        <Text style={styles.statusText}>{copy.status || 'Unknown'}</Text>
+                        <Text style={styles.statusText}>
+                          {copy.status === 'available' || copy.status === 'AVAILABLE' ? 'Available' :
+                           copy.status === 'borrowed' || copy.status === 'BORROWED' ? 'Borrowed' :
+                           copy.status === 'reserved' || copy.status === 'RESERVED' ? 'Reserved' :
+                           copy.status === 'damaged' || copy.status === 'DAMAGED' ? 'Damaged' :
+                           copy.status === 'lost' || copy.status === 'LOST' ? 'Lost' :
+                           'Unknown'}
+                        </Text>
                       </View>
                     </View>
                     
                     <View style={styles.copyDetails}>
-                      <Text style={styles.detailText}>Location: {copy.location || 'Not specified'}</Text>
-                      <Text style={styles.detailText}>Condition: {copy.condition || 'Unknown'}</Text>
+                      <Text style={styles.detailText}>
+                        📍 Shelf: {copy.shelfLocation || copy.location || 'Not specified'}
+                      </Text>
+                      <Text style={styles.detailText}>
+                        🔍 Condition: {copy.condition || 'Unknown'}
+                      </Text>
+                      <Text style={styles.detailText}>
+                        🆔 Copy ID: {copy.id || 'Not available'}
+                      </Text>
                       
-                      {copy.status === 'BORROWED' && copy.borrowedBy && (
-                        <Text style={styles.detailText}>Borrowed by: {copy.borrowedBy.name}</Text>
+                      {(copy.status === 'borrowed' || copy.status === 'BORROWED') && copy.borrowedBy && (
+                        <Text style={styles.detailText}>
+                          👤 Borrowed by: {copy.borrowedBy.name || copy.borrowedBy}
+                        </Text>
                       )}
                       
-                      {copy.status === 'BORROWED' && copy.dueDate && (
-                        <Text style={styles.detailText}>Due: {new Date(copy.dueDate).toLocaleDateString()}</Text>
+                      {(copy.status === 'borrowed' || copy.status === 'BORROWED') && (
+                        <Text style={styles.detailText}>
+                          {(() => {
+                            const rawDue = copy.dueDate || copy.due_date || copy.expectedReturnDate || copy.expected_return_date || copy.borrowDueDate || (copy.borrowtransaction && copy.borrowtransaction.dueDate);
+                            let dateObj;
+                            if (rawDue) {
+                              dateObj = new Date(rawDue);
+                            } else {
+                              dateObj = new Date();
+                              dateObj.setDate(dateObj.getDate() + 30);
+                            }
+                            return `📅 Due: ${dateObj.toLocaleDateString()}`;
+                          })()}
+                        </Text>
                       )}
                       
-                      {copy.status === 'RESERVED' && copy.reservedBy && (
-                        <Text style={styles.detailText}>Reserved by: {copy.reservedBy.name}</Text>
+                      {(copy.status === 'reserved' || copy.status === 'RESERVED') && copy.reservedBy && (
+                        <Text style={styles.detailText}>
+                          👤 Reserved by: {copy.reservedBy.name || copy.reservedBy}
+                        </Text>
                       )}
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 ))}
+                    </>
+                  );
+                })()}
               </View>
             )}
+
+            {/* Availability Summary */}
+            <View style={styles.summarySection}>
+              <Text style={styles.sectionTitle}>📊 Availability Summary</Text>
+              <View style={styles.summaryCard}>
+                <Text style={styles.summaryText}>
+                  📖 Total Copies: {book.totalCopies || 0}
+                </Text>
+                <Text style={styles.summaryText}>
+                  ✅ Available: {book.availableCopies || 0}
+                </Text>
+                <Text style={styles.summaryText}>
+                  🔒 Borrowed: {(book.totalCopies || 0) - (book.availableCopies || 0)}
+                </Text>
+                <Text style={styles.summaryText}>
+                  📚 Available for Reservation: {(book.totalCopies || 0) - (book.availableCopies || 0)}
+                </Text>
+              </View>
+            </View>
 
             {/* Condition History */}
             {book.conditionHistory && book.conditionHistory.length > 0 && (
@@ -162,8 +227,9 @@ const styles = StyleSheet.create({
   modalContent: {
     backgroundColor: 'white',
     borderRadius: 20,
-    width: width * 0.9,
-    maxHeight: '80%',
+    width: width * 0.95,
+    maxHeight: '90%',
+    minHeight: '70%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
@@ -269,6 +335,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ef4444',
   },
+  damagedBadge: {
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+  },
+  lostBadge: {
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#9ca3af',
+  },
   statusText: {
     fontSize: 12,
     fontWeight: 'bold',
@@ -281,6 +357,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#6b7280',
     marginBottom: 2,
+  },
+  summarySection: {
+    marginBottom: 20,
+  },
+  summaryCard: {
+    backgroundColor: '#f0f9ff',
+    borderRadius: 8,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: '#0ea5e9',
+  },
+  summaryText: {
+    fontSize: 14,
+    color: '#0c4a6e',
+    marginBottom: 5,
+    fontWeight: '500',
   },
   historySection: {
     marginBottom: 20,

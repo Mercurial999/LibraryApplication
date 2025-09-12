@@ -2,7 +2,7 @@
 // Enhanced system for Kings College of Marbel library catalog
 
 export const SHELF_LOCATIONS = [
-  { id: "Fi", name: "College", description: "College collection" },
+  { id: "Fi-college", name: "College", description: "College collection" },
   { id: "Fi/senH", name: "Senior High School", description: "Senior High School collection" },
   { id: "Fi/HS", name: "High School", description: "High School collection" },
   { id: "Fi/E", name: "Elementary", description: "Elementary collection" },

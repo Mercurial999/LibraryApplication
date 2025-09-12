@@ -32,16 +32,16 @@ export default function FinesSummaryCard({ summary }) {
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: '#0b1220', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#1f2937' },
-  title: { color: '#e2e8f0', fontSize: 18, fontWeight: '700', marginBottom: 12 },
+  card: { backgroundColor: '#ffffff', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#e5e7eb', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
+  title: { color: '#1e293b', fontSize: 18, fontWeight: '700', marginBottom: 12 },
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   col: { alignItems: 'center', flex: 1 },
-  label: { color: '#94a3b8', fontSize: 12, marginBottom: 4 },
+  label: { color: '#64748b', fontSize: 12, marginBottom: 4 },
   total: { color: '#f59e0b', fontSize: 24, fontWeight: '800' },
-  paid: { color: '#22c55e', fontSize: 20, fontWeight: '700' },
+  paid: { color: '#10b981', fontSize: 20, fontWeight: '700' },
   remaining: { color: '#ef4444', fontSize: 20, fontWeight: '700' },
   metaRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
-  meta: { color: '#94a3b8', fontSize: 12 }
+  meta: { color: '#64748b', fontSize: 12 }
 });
 
 
