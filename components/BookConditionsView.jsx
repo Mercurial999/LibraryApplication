@@ -1,4 +1,5 @@
-import React from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import React, { useEffect, useState } from 'react';
 import {
     Dimensions,
     Modal,
@@ -25,6 +26,25 @@ const BookConditionsView = ({
   selectedCopyOnly = false
 }) => {
   if (!book) return null;
+  const [borrowersIndex, setBorrowersIndex] = useState({});
+
+  useEffect(() => {
+    const loadBorrowers = async () => {
+      try {
+        const { default: ApiService } = await import('../services/ApiService');
+        const res = await fetch(`${ApiService.API_BASE}/api/mobile/books/${encodeURIComponent(book.id)}/borrowers`, {
+          headers: await ApiService.getAuthHeaders(),
+          method: 'GET'
+        });
+        const data = await res.json();
+        const map = data?.data?.borrowersByCopyId || {};
+        setBorrowersIndex(map);
+      } catch (e) {
+        setBorrowersIndex({});
+      }
+    };
+    if (visible && book?.id) loadBorrowers();
+  }, [visible, book?.id]);
 
   const handleSubmit = () => {
     onSubmit && onSubmit();
@@ -41,9 +61,12 @@ const BookConditionsView = ({
         <View style={styles.modalContent}>
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.title}>{title}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <MaterialCommunityIcons name="bookmark-plus" size={20} color="#1f2937" />
+              <Text style={[styles.title, { marginLeft: 8 }]}>{title}</Text>
+            </View>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <Text style={styles.closeButtonText}>✕</Text>
+              <MaterialCommunityIcons name="close" size={18} color="#6b7280" />
             </TouchableOpacity>
           </View>
 
@@ -51,7 +74,10 @@ const BookConditionsView = ({
             {/* Book Information */}
             <View style={styles.bookInfo}>
               <Text style={styles.bookTitle}>{book.title}</Text>
-              <Text style={styles.bookAuthor}>by {book.author}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                <MaterialCommunityIcons name="account" size={14} color="#6b7280" />
+                <Text style={[styles.bookAuthor, { marginLeft: 6 }]}>by {book.author}</Text>
+              </View>
             </View>
 
             {/* Copy Information */}
@@ -90,24 +116,36 @@ const BookConditionsView = ({
                     </View>
                     
                     <View style={styles.copyDetails}>
-                      <Text style={styles.detailText}>
-                        📍 Shelf: {copy.shelfLocation || copy.location || 'Not specified'}
-                      </Text>
-                      <Text style={styles.detailText}>
-                        🔍 Condition: {copy.condition || 'Unknown'}
-                      </Text>
-                      <Text style={styles.detailText}>
-                        🆔 Copy ID: {copy.id || 'Not available'}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                        <MaterialCommunityIcons name="map-marker" size={14} color="#6b7280" />
+                        <Text style={[styles.detailText, { marginLeft: 6 }]}>Shelf: {copy.shelfLocation || copy.location || 'Not specified'}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                        <MaterialCommunityIcons name="magnify" size={14} color="#6b7280" />
+                        <Text style={[styles.detailText, { marginLeft: 6 }]}>Condition: {copy.condition || 'Unknown'}</Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                        <MaterialCommunityIcons name="identifier" size={14} color="#6b7280" />
+                        <Text style={[styles.detailText, { marginLeft: 6 }]}>Copy ID: {copy.id || 'Not available'}</Text>
+                      </View>
                       
-                      {(copy.status === 'borrowed' || copy.status === 'BORROWED') && copy.borrowedBy && (
-                        <Text style={styles.detailText}>
-                          👤 Borrowed by: {copy.borrowedBy.name || copy.borrowedBy}
-                        </Text>
+                      {(copy.status === 'borrowed' || copy.status === 'BORROWED') && (
+                        (() => {
+                          const key = String(copy.id || copy.copyId || copy.copy_id || '');
+                          const name = (copy.borrowedBy && (copy.borrowedBy.name || copy.borrowedBy)) || borrowersIndex[key];
+                          return name ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                              <MaterialCommunityIcons name="account" size={14} color="#6b7280" />
+                              <Text style={[styles.detailText, { marginLeft: 6 }]}>Borrowed by: {name}</Text>
+                            </View>
+                          ) : null;
+                        })()
                       )}
                       
                       {(copy.status === 'borrowed' || copy.status === 'BORROWED') && (
-                        <Text style={styles.detailText}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 2 }}>
+                          <MaterialCommunityIcons name="calendar" size={14} color="#6b7280" />
+                          <Text style={[styles.detailText, { marginLeft: 6 }]}>
                           {(() => {
                             const rawDue = copy.dueDate || copy.due_date || copy.expectedReturnDate || copy.expected_return_date || copy.borrowDueDate || (copy.borrowtransaction && copy.borrowtransaction.dueDate);
                             let dateObj;
@@ -117,9 +155,10 @@ const BookConditionsView = ({
                               dateObj = new Date();
                               dateObj.setDate(dateObj.getDate() + 30);
                             }
-                            return `📅 Due: ${dateObj.toLocaleDateString()}`;
+                              return `Due: ${dateObj.toLocaleDateString()}`;
                           })()}
                         </Text>
+                        </View>
                       )}
                       
                       {(copy.status === 'reserved' || copy.status === 'RESERVED') && copy.reservedBy && (

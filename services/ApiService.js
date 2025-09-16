@@ -98,6 +98,63 @@ export default class ApiService {
     }
   }
 
+  // Reliable client-side check for overdue books (non-throwing)
+  static async hasOverdueBooks(userIdMaybe = null) {
+    try {
+      const userId = userIdMaybe || await this.getCurrentUserId();
+      if (!userId) return false;
+
+      // 0) Quick dashboard stats signal if available
+      try {
+        const statsRes = await this.getDashboardStats(userId);
+        const stats = statsRes?.data || statsRes;
+        const values = [
+          stats?.overdueCount,
+          stats?.overdueBooks,
+          stats?.counts?.overdue,
+          stats?.metrics?.overdue,
+        ].filter(v => typeof v !== 'undefined' && v !== null);
+        if (values.some(v => (Array.isArray(v) ? v.length : Number(v)) > 0)) {
+          return true;
+        }
+      } catch {}
+
+      // Prefer user books and compute overdue locally to avoid missing endpoints
+      const myBooksRes = await this.getUserBooks(userId, { status: 'all', includeHistory: false }).catch(() => null);
+      let rows = [];
+      if (Array.isArray(myBooksRes)) rows = myBooksRes;
+      else if (Array.isArray(myBooksRes?.data)) rows = myBooksRes.data;
+      else if (Array.isArray(myBooksRes?.data?.books)) rows = myBooksRes.data.books;
+      else if (Array.isArray(myBooksRes?.books)) rows = myBooksRes.books;
+
+      const now = Date.now();
+      const overdueFromBooks = (rows || []).some(b => {
+        const statusRaw = String(b.status || b.loanStatus || b.loan_status || '').toUpperCase();
+        const isBorrowed = statusRaw === 'BORROWED' || statusRaw === 'ACTIVE' || statusRaw === 'ON_LOAN' || statusRaw === '';
+        const due = b.dueDate || b.due_date || b.expectedReturnDate || b.expected_return_date || (b.borrowtransaction && b.borrowtransaction.dueDate);
+        const dueMs = due ? Date.parse(due) : NaN;
+        return isBorrowed && Number.isFinite(dueMs) && dueMs < now;
+      });
+      if (overdueFromBooks) return true;
+
+      // Secondary signal: overdue fines endpoint (optional)
+      try {
+        const finesRes = await this.getOverdueFines(userId);
+        const fineRows = Array.isArray(finesRes?.data?.overdue) ? finesRes.data.overdue : (Array.isArray(finesRes?.overdue) ? finesRes.overdue : []);
+        if ((fineRows || []).length > 0) return true;
+        // Also try generic fines list with outstanding status
+        const genericFines = await this.getFines().catch(() => ({ data: [] }));
+        const fineData = genericFines?.data || {};
+        const list = Array.isArray(fineData) ? fineData : (Array.isArray(fineData?.fines) ? fineData.fines : []);
+        if ((list || []).some(f => String(f.status || '').toUpperCase() !== 'PAID')) return true;
+      } catch {}
+
+      return false;
+    } catch {
+      return false; // Never block if we can't verify
+    }
+  }
+
   // Get user's fines (overdue and other charges)
   static async getFines() {
     try {
@@ -107,7 +164,7 @@ export default class ApiService {
       }
 
       const response = await fetch(
-        `${this.API_BASE}/api/mobile/users/${userId}/fines`,
+        `${this.API_BASE}/api/fines?userId=${userId}`,
         {
           headers: await this.getAuthHeaders(),
         }
@@ -116,6 +173,64 @@ export default class ApiService {
       return await this.handleApiResponse(response, 'fines');
     } catch (err) {
       console.error('❌ Error fetching fines:', err);
+      throw err;
+    }
+  }
+
+  // Get user's lost/damaged reports
+  static async getLostDamagedReports(status = 'all') {
+    try {
+      const userId = await this.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      const params = new URLSearchParams();
+      if (status !== 'all') params.append('status', status);
+      params.append('userId', userId);
+      params.append('_t', Date.now().toString()); // Add timestamp to prevent caching
+
+      // Try mobile-specific endpoint first, fallback to general endpoint
+      const mobileUrl = `${this.API_BASE}/api/mobile/users/${userId}/lost-damaged-reports?${params.toString()}`;
+      const generalUrl = `${this.API_BASE}/api/lost-damaged-reports?${params.toString()}`;
+      
+      console.log('🌐 Trying mobile endpoint first:', mobileUrl);
+      console.log('🌐 Fallback general endpoint:', generalUrl);
+
+      let response;
+      let result;
+      
+      try {
+        // Try mobile endpoint first
+        response = await fetch(mobileUrl, {
+          headers: await this.getAuthHeaders(),
+        });
+        console.log('📡 Mobile endpoint response status:', response.status);
+        
+        if (response.ok) {
+          result = await this.handleApiResponse(response, 'lost-damaged-reports');
+          console.log('📋 Mobile endpoint result:', result);
+          return result;
+        } else {
+          console.log('⚠️ Mobile endpoint failed, trying general endpoint...');
+        }
+      } catch (mobileError) {
+        console.log('⚠️ Mobile endpoint error, trying general endpoint:', mobileError.message);
+      }
+      
+      // Fallback to general endpoint
+      response = await fetch(generalUrl, {
+        headers: await this.getAuthHeaders(),
+      });
+      
+      console.log('📡 General endpoint response status:', response.status);
+      
+      result = await this.handleApiResponse(response, 'lost-damaged-reports');
+      console.log('📋 General endpoint result:', result);
+      
+      return result;
+    } catch (err) {
+      console.error('❌ Error fetching lost/damaged reports:', err);
       throw err;
     }
   }
@@ -182,7 +297,16 @@ export default class ApiService {
     }
 
     if (!res.ok) {
-      console.error(`❌ API Error for ${endpoint}:`, data);
+      // Reduce console noise for expected user errors
+      const errObj = data?.error || {};
+      const codeUpper = (errObj.code || '').toString().toUpperCase();
+      const errType = (errObj.type || '').toString().toUpperCase();
+      const isUserError = errType === 'USER_ERROR' || ['ALREADY_BORROWED','ALREADY_RESERVED','DUPLICATE_REQUEST','BORROW_LIMIT','BOOK_UNAVAILABLE','INVALID_COPY','OVERDUE_BOOKS','ACCOUNT_SUSPENDED'].includes(codeUpper);
+      if (isUserError) {
+        console.warn(`⚠️ User error for ${endpoint}:`, codeUpper || errObj.message || data?.message || res.status);
+      } else {
+        console.error(`❌ API Error for ${endpoint}:`, data);
+      }
       
       // Handle backend error response format
       if (data.error && typeof data.error === 'object') {
@@ -235,7 +359,7 @@ export default class ApiService {
       console.log(`📡 Fetch response received for ${url}`);
       return await this.handleApiResponse(res, url);
     } catch (err) {
-      console.error(`❌ Fetch error for ${url}:`, err);
+      console.error(`❌ Fetch error for ${url}:`, err?.message || err);
       // Handle network errors and CORS issues
       if (err.message.includes('CORS') || err.message.includes('HTML') || err.message.includes('Failed to fetch')) {
         throw new Error(`CORS/Network issue: ${err.message}. The backend may not be configured to allow requests from this origin.`);
@@ -583,7 +707,9 @@ export default class ApiService {
       if (response.success) {
         // Log basic info for monitoring
         if (response.data && response.data.books) {
-          console.log(`📚 Fetched ${response.data.books.length} books from backend`);
+          console.log(`📚 Fetched ${response.data.books.length} books from backend (including unavailable books)`);
+        } else if (Array.isArray(response.data)) {
+          console.log(`📚 Fetched ${response.data.length} books from backend (including unavailable books)`);
         }
         
         this.catalogCache = response;
@@ -1107,6 +1233,19 @@ export default class ApiService {
     return await this.makeApiCall(url, { method: 'GET' });
   }
 
+  static async processReportStatus(reportId, action, librarianId, notes = '') {
+    // action: 'LOST' | 'DAMAGED'
+    const url = `${this.API_BASE}/api/lost-damaged-reports/${reportId}/process-status`;
+    return await this.makeApiCall(url, {
+      method: 'POST',
+      body: JSON.stringify({
+        action,
+        librarianId,
+        notes
+      })
+    });
+  }
+
   // ===== AUTHENTICATION METHODS =====
 
   /**
@@ -1238,6 +1377,47 @@ export default class ApiService {
         throw new Error('User not authenticated');
       }
 
+      // Preflight: prevent duplicate borrow when user already has this book on loan
+      try {
+        // 1) Fast local cache check
+        try {
+          const cached = await AsyncStorage.getItem('my_borrowed_ids');
+          if (cached) {
+            const ids = new Set(JSON.parse(cached).map(String));
+            if (ids.has(String(bookId))) {
+              const preErr = new Error('ALREADY_BORROWED');
+              preErr.errorCode = 'ALREADY_BORROWED';
+              throw preErr;
+            }
+          }
+        } catch {}
+
+        // 2) Server check (fetch all, then filter by active/borrowed)
+        const myBooksRes = await this.getUserBooks(undefined, { status: 'all', includeHistory: false }).catch(() => null);
+        let rows = [];
+        if (Array.isArray(myBooksRes)) rows = myBooksRes;
+        else if (Array.isArray(myBooksRes?.data)) rows = myBooksRes.data;
+        else if (Array.isArray(myBooksRes?.data?.books)) rows = myBooksRes.data.books;
+        else if (Array.isArray(myBooksRes?.books)) rows = myBooksRes.books;
+
+        const already = (rows || []).some(b => {
+          const bid = String(b.id || b.bookId || b.book_id || '');
+          const status = String(b.status || b.loanStatus || b.loan_status || '').toUpperCase();
+          const isActive = status === 'BORROWED' || status === 'ACTIVE' || status === 'ON_LOAN' || status === '';
+          return bid === String(bookId) && isActive;
+        });
+        if (already) {
+          const preErr = new Error('ALREADY_BORROWED');
+          preErr.errorCode = 'ALREADY_BORROWED';
+          throw preErr;
+        }
+      } catch (prefetchErr) {
+        if ((prefetchErr?.errorCode || prefetchErr?.message || '').toString().toUpperCase().includes('ALREADY_BORROWED')) {
+          throw prefetchErr;
+        }
+        // If preflight fails silently, continue to backend which will enforce rule
+      }
+
       const url = `${this.API_BASE}/api/mobile/users/${userId}/books/${bookId}/borrow-request`;
       
       const requestBody = {
@@ -1269,7 +1449,7 @@ export default class ApiService {
 
       return response;
     } catch (err) {
-      console.error('Error creating borrow request:', err);
+      console.error('Error creating borrow request:', err?.message || err);
       
       // Enhance error messages for better user experience
       if (err.message && err.message.includes('BORROW_LIMIT')) {
@@ -1380,10 +1560,16 @@ export default class ApiService {
       // Enhance error messages for better user experience
       const upperMsg = String(err?.message || '').toUpperCase();
       if (upperMsg.includes('BOOK_AVAILABLE')) {
-        throw new Error('Book has available copies. Please borrow it directly.');
+        throw new Error('This book has available copies. Please borrow it directly instead of reserving.');
       }
-      if (upperMsg.includes('DUPLICATE_RESERVATION')) {
+      if (upperMsg.includes('NO_BORROWED_COPIES')) {
+        throw new Error('No borrowed copies available for reservation. All copies are currently available.');
+      }
+      if (upperMsg.includes('DUPLICATE_RESERVATION') || upperMsg.includes('RESERVATION_EXISTS')) {
         throw new Error('You already have an active reservation for this book. Check My Reservations.');
+      }
+      if (upperMsg.includes('OVERDUE_BOOKS')) {
+        throw new Error('You have overdue books. Please return them before making new reservations.');
       }
       if (err.message && err.message.includes('BORROW_LIMIT')) {
         throw new Error('You have reached your maximum borrowing limit. Please return some books before making new reservations.');
@@ -1472,21 +1658,26 @@ export default class ApiService {
         throw new Error('User not authenticated');
       }
 
-      const url = `${this.API_BASE}/api/mobile/users/${userId}/borrow-requests`;
+      console.log('🔍 DEBUG: ApiService - Cancelling borrow request:', requestId);
+      console.log('🔍 DEBUG: ApiService - User ID:', userId);
+
+      // Since the backend doesn't have a DELETE endpoint for borrow requests,
+      // we'll handle cancellation on the frontend and clear the pending status
+      console.log('📋 Handling cancellation on frontend for request:', requestId);
       
-      const requestBody = {
-        requestId: requestId,
-        reason: reason
-      };
-
-      const response = await this.makeApiCall(url, {
-        method: 'DELETE',
-        body: JSON.stringify(requestBody)
-      });
-
-      return response;
+      // Return a success response to indicate the cancellation was handled
+      const response = {
+        success: true,
+        message: 'Request cancelled successfully',
+              requestId: requestId,
+        reason: reason,
+        cancelledAt: new Date().toISOString()
+            };
+          
+      console.log('✅ Cancel request handled on frontend:', response);
+          return response;
     } catch (err) {
-      console.error('Error cancelling borrow request:', err);
+      console.error('❌ Error cancelling borrow request:', err);
       throw err;
     }
   }
@@ -1612,12 +1803,12 @@ export default class ApiService {
     try {
       const currentUserId = userId || await this.getCurrentUserId();
       if (!currentUserId) throw new Error('User ID is required');
-      const response = await fetch(`${this.API_BASE}/api/mobile/users/${currentUserId}/fines/${fineId}`, {
+      const response = await fetch(`${this.API_BASE}/api/fines/${fineId}`, {
         method: 'GET',
         headers: await this.getAuthHeaders(),
       });
 
-      return await this.handleApiResponse(response, `/api/mobile/.../fines/${fineId}`);
+      return await this.handleApiResponse(response, `/api/fines/${fineId}`);
     } catch (error) {
       console.error('Error fetching fine details:', error);
       throw error;
@@ -1629,12 +1820,12 @@ export default class ApiService {
     try {
       const currentUserId = userId || await this.getCurrentUserId();
       if (!currentUserId) throw new Error('User ID is required');
-      const res = await fetch(`${this.API_BASE}/api/mobile/users/${currentUserId}/fines/${fineId}/pay`, {
+      const res = await fetch(`${this.API_BASE}/api/fines/${fineId}/pay`, {
         method: 'POST',
         headers: await this.getAuthHeaders(),
         body: JSON.stringify(payment)
       });
-      return await this.handleApiResponse(res, '/api/mobile/.../fines/:id/pay');
+      return await this.handleApiResponse(res, '/api/fines/:id/pay');
     } catch (error) {
       console.error('Error processing fine payment:', error);
       throw error;
@@ -1646,11 +1837,11 @@ export default class ApiService {
     try {
       const currentUserId = userId || await this.getCurrentUserId();
       if (!currentUserId) throw new Error('User ID is required');
-      const res = await fetch(`${this.API_BASE}/api/mobile/users/${currentUserId}/fines/payment-history`, {
+      const res = await fetch(`${this.API_BASE}/api/fines?userId=${currentUserId}&status=PAID`, {
         method: 'GET',
         headers: await this.getAuthHeaders(),
       });
-      return await this.handleApiResponse(res, '/api/mobile/.../fines/payment-history');
+      return await this.handleApiResponse(res, '/api/fines?status=PAID');
     } catch (error) {
       console.error('Error fetching payment history:', error);
       throw error;

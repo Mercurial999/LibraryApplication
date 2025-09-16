@@ -2,8 +2,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Dimensions, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Dimensions, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ApiService from '../services/ApiService';
+import { clearAllRecommendationData } from '../services/RecoService';
 
 const { width } = Dimensions.get('window');
 
@@ -151,7 +152,57 @@ const Sidebar = ({ visible, onClose, currentRoute }) => {
     return items;
   }, [userData]);
 
+  const handleLogout = async () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Stop StatusSync first to prevent authentication errors
+              const StatusSync = require('../utils/StatusSync').default;
+              StatusSync.stopSync();
+              StatusSync.cleanup();
+              
+              // Clear all user data
+              await AsyncStorage.multiRemove(['userToken', 'userData']);
+              
+              // Clear recommendation data
+              await clearAllRecommendationData();
+              
+              // Clear API service token
+              ApiService.setAuthToken(null);
+              
+              // Navigate to login
+              router.replace('/login');
+              
+              // Close sidebar
+              onClose && onClose();
+            } catch (error) {
+              console.error('Error during logout:', error);
+              // Still navigate to login even if cleanup fails
+              router.replace('/login');
+              onClose && onClose();
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleNavigation = (route) => {
+    if (route === '/login') {
+      handleLogout();
+      return;
+    }
+    
     router.push(route);
     // Close sidebar after slight delay to allow push animation to begin
     requestAnimationFrame(() => {

@@ -1,4 +1,6 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
     ActivityIndicator,
@@ -13,11 +15,15 @@ import {
     View
 } from 'react-native';
 import ApiService from '../services/ApiService';
-import { handleErrorForUI } from '../utils/ErrorHandler';
+import BorrowErrorDialog from './BorrowErrorDialog';
 
-const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess }) => {
+const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess, onAlreadyBorrowed, onDuplicateRequest, onReserveInstead }) => {
   const [requestNotes, setRequestNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [alreadyBorrowed, setAlreadyBorrowed] = useState(false);
+  const [errorDialog, setErrorDialog] = useState({ visible: false, type: null });
+  const [hasOverdues, setHasOverdues] = useState(false);
+  const router = useRouter();
 
   // Calculate return date - automatically 3 days from now
   const getReturnDate = () => {
@@ -30,6 +36,90 @@ const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess })
   React.useEffect(() => {
     if (visible) {
       setRequestNotes('');
+      // Pre-check if user already borrowed this book and short-circuit
+      (async () => {
+        try {
+          // Check overdue status first and block early (endpoint-agnostic)
+          try {
+            const has = await ApiService.hasOverdueBooks();
+            if (has) {
+              setHasOverdues(true);
+              setErrorDialog({ visible: true, type: 'overdue_books' });
+              return;
+            }
+          } catch (e) {}
+
+          if (!book?.id) return;
+          
+          // First check cached data for instant feedback
+          try {
+            const cached = await AsyncStorage.getItem('my_borrowed_ids');
+            if (cached) {
+              const cachedIds = new Set(JSON.parse(cached).map(String));
+              if (cachedIds.has(String(book.id))) {
+                console.log('📋 Found book in cached borrowed IDs:', book.id);
+                setAlreadyBorrowed(true);
+                Alert.alert(
+                  'Already Borrowed', 
+                  'You already have this book borrowed. You cannot request to borrow or reserve it again. You can view it in My Books.',
+                  [
+                    { text: 'View My Books', onPress: () => { onClose && onClose(); } },
+                    { text: 'OK', onPress: () => { onClose && onClose(); } }
+                  ]
+                );
+                return;
+              }
+            }
+          } catch {}
+
+          // Then check server data
+          const res = await ApiService.getUserBooks(undefined, { status: 'borrowed', includeHistory: false }).catch(() => null);
+          const rows = Array.isArray(res)
+            ? res
+            : (Array.isArray(res?.data) ? res.data : (res?.data?.books || res?.books || []));
+          
+          // More comprehensive check for borrowed books
+          const mine = (rows || []).find(b => {
+            const possibleIds = [
+              b.id,
+              b.bookId,
+              b.book_id,
+              b.book?.id,
+              b.book?.bookId,
+              b.book?.book_id
+            ];
+            return possibleIds.some(id => String(id) === String(book.id));
+          });
+          
+          if (mine) {
+            console.log('📋 Found book in server borrowed data:', book.id, mine);
+            setAlreadyBorrowed(true);
+            // Persist to global cache so catalog can reflect immediately
+            try {
+              const key = 'my_borrowed_ids';
+              const prev = await AsyncStorage.getItem(key);
+              const setPrev = new Set(prev ? JSON.parse(prev).map(String) : []);
+              setPrev.add(String(book.id));
+              await AsyncStorage.setItem(key, JSON.stringify(Array.from(setPrev)));
+              console.log('📋 Updated cached borrowed IDs with:', book.id);
+            } catch {}
+            // Notify parent and close to avoid any API call
+            try { onAlreadyBorrowed && onAlreadyBorrowed(); } catch {}
+            Alert.alert(
+              'Already Borrowed', 
+              'You already have this book borrowed. You cannot request to borrow or reserve it again. You can view it in My Books.',
+              [
+                { text: 'View My Books', onPress: () => { onClose && onClose(); } },
+                { text: 'OK', onPress: () => { onClose && onClose(); } }
+              ]
+            );
+          } else {
+            setAlreadyBorrowed(false);
+          }
+        } catch (e) {
+          console.log('⚠️ Error in pre-check:', e?.message);
+        }
+      })();
     }
   }, [visible]);
 
@@ -37,6 +127,34 @@ const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess })
     if (!selectedCopy) {
       Alert.alert('Error', 'Please select a copy to borrow');
       return;
+    }
+
+    // Prefer overdue block FIRST so users see the correct reason
+    if (hasOverdues) {
+      setErrorDialog({ visible: true, type: 'overdue_books' });
+      return;
+    }
+
+    if (alreadyBorrowed) {
+      setErrorDialog({ visible: true, type: 'already_borrowed' });
+      return;
+    }
+
+    // Prevent borrow if the selected copy is not borrowable (lost/damaged/borrowed)
+    const rawStatus = String(selectedCopy.status || '').toUpperCase();
+    if (rawStatus && rawStatus !== 'AVAILABLE') {
+      if (rawStatus.includes('LOST')) {
+        setErrorDialog({ visible: true, type: 'copy_unavailable' });
+        return;
+      }
+      if (rawStatus.includes('DAMAGED')) {
+        setErrorDialog({ visible: true, type: 'copy_unavailable' });
+        return;
+      }
+      if (rawStatus.includes('BORROWED') || rawStatus.includes('RESERVED')) {
+        setErrorDialog({ visible: true, type: 'copy_unavailable' });
+        return;
+      }
     }
 
     setLoading(true);
@@ -80,35 +198,42 @@ const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess })
         const errorMessage = response.error?.message || 'Failed to submit borrow request';
         
         if (errorCode === 'BORROW_LIMIT') {
-          Alert.alert(
-            'Borrowing Limit Reached',
-            'You have reached your maximum borrowing limit. Please return some books before requesting new ones.',
-            [{ text: 'OK' }]
-          );
+          setErrorDialog({ visible: true, type: 'copy_unavailable' });
         } else if (errorCode === 'BOOK_UNAVAILABLE') {
-          Alert.alert(
-            'Book Unavailable',
-            'This book is no longer available for borrowing.',
-            [{ text: 'OK' }]
-          );
+          setErrorDialog({ visible: true, type: 'copy_unavailable' });
+        } else if (errorCode === 'ALREADY_BORROWED') {
+          setErrorDialog({ visible: true, type: 'already_borrowed' });
         } else if (errorCode === 'DUPLICATE_REQUEST' || errorMessage.includes('already requested') || errorMessage.includes('duplicate') || errorMessage.includes('pending borrow request')) {
-          Alert.alert(
-            'Request Already Submitted',
-            'You have already submitted a borrow request for this book. Please wait for approval or check your requests.',
-            [
-              { text: 'OK' },
-              { text: 'View My Requests', onPress: () => {
-                onClose();
-                // Navigate to requests page - you might need to pass router as prop
-              }}
-            ]
-          );
+          setErrorDialog({ visible: true, type: 'duplicate_request' });
         } else {
-          Alert.alert('Error', errorMessage);
+          setErrorDialog({ visible: true, type: 'copy_unavailable' });
         }
       }
     } catch (error) {
-      handleErrorForUI(error, Alert.alert, 'Request Failed');
+      const message = String(error?.errorCode || error?.message || '').toUpperCase();
+      if (message.includes('ALREADY_BORROWED')) {
+        setErrorDialog({ visible: true, type: 'already_borrowed' });
+        try { onAlreadyBorrowed && onAlreadyBorrowed(); } catch {}
+      } else if (message.includes('OVERDUE_BOOKS')) {
+        setErrorDialog({ visible: true, type: 'overdue_books' });
+      } else if (
+        message.includes('DUPLICATE_REQUEST') ||
+        message.includes('PENDING BORROW REQUEST') ||
+        message.includes('ALREADY REQUESTED') ||
+        message.includes('DUPLICATE')
+      ) {
+        setErrorDialog({ visible: true, type: 'duplicate_request' });
+        try { onDuplicateRequest && onDuplicateRequest(selectedCopy?.id); } catch {}
+      } else if (message.includes('REPORTED') && message.includes('LOST')) {
+        setErrorDialog({ visible: true, type: 'lost_reported' });
+      } else if (message.includes('REPORTED') && message.includes('DAMAGED')) {
+        setErrorDialog({ visible: true, type: 'lost_reported' });
+      } else if (message.includes('BOOK_LOST') || message.includes('COPY_LOST') || message.includes('BOOK_DAMAGED') || message.includes('COPY_DAMAGED')) {
+        setErrorDialog({ visible: true, type: 'copy_unavailable' });
+      } else {
+        // For any other errors, show a generic error dialog
+        setErrorDialog({ visible: true, type: 'copy_unavailable' });
+      }
     } finally {
       setLoading(false);
     }
@@ -120,7 +245,34 @@ const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess })
 
   const handleClose = () => {
     resetForm();
+    setErrorDialog({ visible: false, type: null });
     onClose();
+  };
+
+  const handleErrorDialogClose = () => {
+    setErrorDialog({ visible: false, type: null });
+  };
+
+  const handleViewMyBooks = () => {
+    setErrorDialog({ visible: false, type: null });
+    onClose();
+    // Navigate to my books - this would need to be passed as a prop or use router
+  };
+
+  const handleViewFines = () => {
+    setErrorDialog({ visible: false, type: null });
+    onClose();
+    try {
+      router.push('/overdue-fines');
+    } catch {}
+  };
+
+  const handleReserveInstead = () => {
+    setErrorDialog({ visible: false, type: null });
+    onClose();
+    if (onReserveInstead) {
+      onReserveInstead();
+    }
   };
 
   return (
@@ -253,8 +405,20 @@ const BorrowRequestModal = ({ visible, onClose, book, selectedCopy, onSuccess })
               </>
             )}
           </TouchableOpacity>
+
         </ScrollView>
       </View>
+
+      {/* Error Dialog */}
+      <BorrowErrorDialog
+        visible={errorDialog.visible}
+        onClose={handleErrorDialogClose}
+        errorType={errorDialog.type}
+        bookTitle={book?.title}
+        onViewMyBooks={handleViewMyBooks}
+        onReserveInstead={handleReserveInstead}
+        onViewFines={handleViewFines}
+      />
     </Modal>
   );
 };

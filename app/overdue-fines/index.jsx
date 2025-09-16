@@ -1,10 +1,11 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
+import { formatPeso } from '../../utils/CurrencyUtils';
 
 // Lazy import components to avoid circular deps during creation
 
@@ -22,11 +23,74 @@ export default function OverdueFinesScreen() {
         throw new Error('User not authenticated');
       }
 
-      const res = await fetch(`${ApiService.API_BASE}/api/mobile/users/${userId}/overdue-fines`, {
-        headers: await ApiService.getAuthHeaders()
-      });
-      const data = await ApiService.handleApiResponse(res, 'overdue-fines');
-      setOverdueData(data.data);
+      // Try the overdue-fines API first
+      try {
+        const res = await fetch(`${ApiService.API_BASE}/api/mobile/users/${userId}/overdue-fines`, {
+          headers: await ApiService.getAuthHeaders()
+        });
+        const data = await ApiService.handleApiResponse(res, 'overdue-fines');
+        console.log('🔍 Overdue-fines API response:', data);
+        setOverdueData(data.data);
+      } catch (overdueErr) {
+        console.log('⚠️ Overdue-fines API failed, trying alternative approach:', overdueErr.message);
+        
+        // Fallback: Use the same approach as the fines page
+        const [finesResponse, overdueResponse, lostReportsResponse] = await Promise.all([
+          ApiService.getFines(),
+          ApiService.getOverdueTransactions(),
+          ApiService.getLostDamagedReports('all').catch(() => ({ data: [] }))
+        ]);
+
+        console.log('🔍 Fines response:', finesResponse);
+        console.log('🔍 Overdue response:', overdueResponse);
+        console.log('🔍 Lost reports response:', lostReportsResponse);
+
+        // Get current user to filter lost reports
+        const currentUser = await ApiService.getCurrentUser();
+        const userId = currentUser?.id;
+
+        // Filter lost reports for current user and create overdue book entries
+        const lostReports = Array.isArray(lostReportsResponse) 
+          ? lostReportsResponse 
+          : (lostReportsResponse?.data || []);
+        
+        const userLostReports = lostReports.filter(report => 
+          String(report.userId || report.user_id) === String(userId) &&
+          report.reportType === 'LOST' &&
+          report.status === 'PROCESSED'
+        );
+
+        // Convert lost reports to overdue book format for consistency
+        const lostBooksAsOverdue = userLostReports.map(report => ({
+          id: report.id,
+          title: report.bookTitle || 'Unknown Book',
+          author: report.bookAuthor || 'Unknown Author',
+          dueDate: report.dueDate || new Date().toISOString(),
+          fine: {
+            id: `lost_fine_${report.id}`,
+            amount: report.fineAmount || report.replacementCost || 0
+          },
+          isLost: true,
+          reportDate: report.reportDate
+        }));
+
+        // Combine overdue books with lost books
+        const allOverdueBooks = [
+          ...(overdueResponse?.data || []),
+          ...lostBooksAsOverdue
+        ];
+
+        // Create a mock overdue data structure
+        const mockOverdueData = {
+          overdueBooks: allOverdueBooks,
+          finesSummary: {
+            totalAmount: 0,
+            unpaidCount: 0
+          }
+        };
+
+        setOverdueData(mockOverdueData);
+      }
     } catch (err) {
       console.error('Error fetching overdue data:', err);
       Alert.alert('Error', err.message || 'Failed to load overdue & fines');
@@ -38,6 +102,13 @@ export default function OverdueFinesScreen() {
   useEffect(() => {
     fetchOverdueData();
   }, [fetchOverdueData]);
+
+  // Refresh data when screen comes into focus (e.g., returning from payment)
+  useFocusEffect(
+    useCallback(() => {
+      fetchOverdueData();
+    }, [fetchOverdueData])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -52,6 +123,41 @@ export default function OverdueFinesScreen() {
 
   const handleViewDetails = (bookId) => {
     router.push(`/overdue-fines/details?id=${encodeURIComponent(bookId)}`);
+  };
+
+  // Calculate total fines from overdue books
+  const calculateTotalFines = () => {
+    if (!overdueData?.overdueBooks) {
+      console.log('🔍 No overdue books data available');
+      return 0;
+    }
+    
+    console.log('🔍 Overdue books data:', overdueData.overdueBooks);
+    
+    const total = overdueData.overdueBooks.reduce((total, book) => {
+      const fineAmount = book.fine?.amount || 0;
+      console.log(`🔍 Book "${book.title}" fine amount:`, fineAmount);
+      return total + fineAmount;
+    }, 0);
+    
+    console.log('🔍 Total calculated fines:', total);
+    return total;
+  };
+
+  // Calculate unpaid fines count
+  const calculateUnpaidCount = () => {
+    if (!overdueData?.overdueBooks) {
+      console.log('🔍 No overdue books data for count calculation');
+      return 0;
+    }
+    
+    const unpaidCount = overdueData.overdueBooks.filter(book => {
+      const fineAmount = book.fine?.amount || 0;
+      return fineAmount > 0;
+    }).length;
+    
+    console.log('🔍 Unpaid fines count:', unpaidCount);
+    return unpaidCount;
   };
 
   if (loading) {
@@ -84,11 +190,18 @@ export default function OverdueFinesScreen() {
           </View>
           <View style={styles.summaryContent}>
             <Text style={styles.totalAmount}>
-              ₱{overdueData?.finesSummary?.totalAmount || '0.00'}
+              {formatPeso(calculateTotalFines())}
             </Text>
             <Text style={styles.summarySubtext}>
-              {overdueData?.finesSummary?.unpaidCount || 0} unpaid fines
+              {calculateUnpaidCount()} unpaid fines
             </Text>
+            <TouchableOpacity 
+              style={styles.paymentHistoryButton}
+              onPress={() => router.push('/fines/payment-history')}
+            >
+              <MaterialCommunityIcons name="history" size={16} color="#3b82f6" />
+              <Text style={styles.paymentHistoryText}>View Payment History</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -111,29 +224,54 @@ export default function OverdueFinesScreen() {
                       by {book.author || 'Unknown Author'}
                     </Text>
                   </View>
-                  <View style={[styles.statusBadge, { backgroundColor: '#dc2626' }]}>
-                    <Text style={styles.statusText}>Overdue</Text>
+                  <View style={[styles.statusBadge, { 
+                    backgroundColor: book.isLost ? '#7c2d12' : '#dc2626' 
+                  }]}>
+                    <Text style={styles.statusText}>
+                      {book.isLost ? 'Lost' : 'Overdue'}
+                    </Text>
                   </View>
                 </View>
 
                 <View style={styles.bookDetails}>
-                  <View style={styles.detailItem}>
-                    <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
-                    <Text style={styles.detailText}>
-                      Due: {new Date(book.dueDate).toLocaleDateString()}
-                    </Text>
-                  </View>
-                  <View style={styles.detailItem}>
-                    <MaterialCommunityIcons name="clock-alert" size={16} color="#dc2626" />
-                    <Text style={[styles.detailText, { color: '#dc2626' }]}>
-                      {book.daysOverdue || 0} days overdue
-                    </Text>
-                  </View>
+                  {book.isLost ? (
+                    <>
+                      <View style={styles.detailItem}>
+                        <MaterialCommunityIcons name="book-off" size={16} color="#7c2d12" />
+                        <Text style={[styles.detailText, { color: '#7c2d12' }]}>
+                          Book reported as lost
+                        </Text>
+                      </View>
+                      {book.reportDate && (
+                        <View style={styles.detailItem}>
+                          <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
+                          <Text style={styles.detailText}>
+                            Reported: {new Date(book.reportDate).toLocaleDateString()}
+                          </Text>
+                        </View>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.detailItem}>
+                        <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
+                        <Text style={styles.detailText}>
+                          Due: {new Date(book.dueDate).toLocaleDateString()}
+                        </Text>
+                      </View>
+                      <View style={styles.detailItem}>
+                        <MaterialCommunityIcons name="clock-alert" size={16} color="#dc2626" />
+                        <Text style={[styles.detailText, { color: '#dc2626' }]}>
+                          {book.daysOverdue || 0} days overdue
+                        </Text>
+                      </View>
+                    </>
+                  )}
                   {book.fine && (
                     <View style={styles.detailItem}>
                       <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
                       <Text style={[styles.detailText, { color: '#dc2626' }]}>
-                        Fine: ₱{book.fine.amount?.toFixed(2) || '0.00'}
+                        Fine: {formatPeso(book.fine.amount || 0)}
                       </Text>
                     </View>
                   )}
@@ -217,6 +355,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#64748b',
     fontWeight: '500',
+  },
+  paymentHistoryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  paymentHistoryText: {
+    fontSize: 14,
+    color: '#3b82f6',
+    fontWeight: '600',
+    marginLeft: 6,
   },
 
   // Overdue Section

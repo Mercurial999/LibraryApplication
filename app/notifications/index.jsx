@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
@@ -20,6 +20,8 @@ const NotificationsScreen = () => {
   const [error, setError] = useState('');
   const [items, setItems] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedNotification, setSelectedNotification] = useState(null);
+  const [detailsModalVisible, setDetailsModalVisible] = useState(false);
   const router = useRouter();
 
   const loadNotifications = async () => {
@@ -53,17 +55,25 @@ const NotificationsScreen = () => {
 
   const notificationCount = useMemo(() => items.length, [items]);
 
+  const handleNotificationPress = (item) => {
+    setSelectedNotification(item);
+    setDetailsModalVisible(true);
+  };
+
+  const handleActionPress = (item) => {
+    setDetailsModalVisible(false);
+    if (item.meta?.reservationId) router.push('/borrowing/reserve');
+    else if (item.meta?.fineId) router.push('/fines');
+    else if (item.meta?.bookId) router.push('/book-catalog');
+  };
+
   const renderItem = ({ item }) => {
     const accent = typeToAccent[item.type] || typeToAccent.SYSTEM;
     return (
       <TouchableOpacity
         style={[styles.card, { borderLeftColor: accent.border, backgroundColor: accent.bg }]}
         activeOpacity={0.9}
-        onPress={() => {
-          if (item.meta?.reservationId) router.push('/reservation');
-          else if (item.meta?.fineId) router.push('/fines');
-          else if (item.meta?.bookId) router.push('/book-catalog');
-        }}
+        onPress={() => handleNotificationPress(item)}
       >
         <Text style={styles.cardIcon}>{accent.icon}</Text>
         <View style={styles.cardBody}>
@@ -120,6 +130,99 @@ const NotificationsScreen = () => {
           }
         />
       )}
+
+      {/* Notification Details Modal */}
+      <Modal
+        visible={detailsModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDetailsModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            {selectedNotification && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Notification Details</Text>
+                  <TouchableOpacity
+                    style={styles.closeButton}
+                    onPress={() => setDetailsModalVisible(false)}
+                  >
+                    <Text style={styles.closeButtonText}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+                
+                <ScrollView style={styles.modalBody}>
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailLabel}>Type</Text>
+                    <View style={[styles.typeBadge, { backgroundColor: typeToAccent[selectedNotification.type]?.bg || '#f1f5f9' }]}>
+                      <Text style={styles.typeIcon}>{typeToAccent[selectedNotification.type]?.icon || 'ℹ️'}</Text>
+                      <Text style={[styles.typeText, { color: typeToAccent[selectedNotification.type]?.text || '#334155' }]}>
+                        {selectedNotification.type}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailLabel}>Title</Text>
+                    <Text style={styles.detailValue}>{selectedNotification.title}</Text>
+                  </View>
+
+                  {selectedNotification.message && (
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailLabel}>Message</Text>
+                      <Text style={styles.detailValue}>{selectedNotification.message}</Text>
+                    </View>
+                  )}
+
+                  <View style={styles.detailSection}>
+                    <Text style={styles.detailLabel}>Date & Time</Text>
+                    <Text style={styles.detailValue}>
+                      {new Date(selectedNotification.createdAt).toLocaleString('en-US', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Text>
+                  </View>
+
+                  {selectedNotification.meta && Object.keys(selectedNotification.meta).length > 0 && (
+                    <View style={styles.detailSection}>
+                      <Text style={styles.detailLabel}>Additional Information</Text>
+                      <View style={styles.metaContainer}>
+                        {Object.entries(selectedNotification.meta).map(([key, value]) => (
+                          <View key={key} style={styles.metaItem}>
+                            <Text style={styles.metaKey}>{key}:</Text>
+                            <Text style={styles.metaValue}>{String(value)}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+                </ScrollView>
+
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity
+                    style={styles.actionButton}
+                    onPress={() => handleActionPress(selectedNotification)}
+                  >
+                    <Text style={styles.actionButtonText}>Take Action</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.closeModalButton}
+                    onPress={() => setDetailsModalVisible(false)}
+                  >
+                    <Text style={styles.closeModalButtonText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -153,5 +256,140 @@ const styles = StyleSheet.create({
   stateText: { color: '#475569', marginTop: 10 },
   errorText: { color: '#ef4444', fontWeight: '600', marginBottom: 12 },
   retryBtn: { backgroundColor: '#3b82f6', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
-  retryText: { color: '#fff', fontWeight: '700' }
+  retryText: { color: '#fff', fontWeight: '700' },
+
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    width: '100%',
+    maxHeight: '90%',
+    minHeight: '60%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  closeButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  closeButtonText: {
+    fontSize: 18,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  modalBody: {
+    flex: 1,
+    padding: 20,
+    minHeight: 200,
+  },
+  detailSection: {
+    marginBottom: 20,
+  },
+  detailLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  detailValue: {
+    fontSize: 16,
+    color: '#1e293b',
+    lineHeight: 24,
+  },
+  typeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  typeIcon: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  typeText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  metaContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    padding: 12,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  metaKey: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748b',
+    minWidth: 100,
+  },
+  metaValue: {
+    fontSize: 14,
+    color: '#1e293b',
+    flex: 1,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    padding: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    backgroundColor: '#3b82f6',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  actionButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  closeModalButton: {
+    flex: 1,
+    backgroundColor: '#f1f5f9',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  closeModalButtonText: {
+    color: '#64748b',
+    fontSize: 16,
+    fontWeight: '600',
+  },
 });

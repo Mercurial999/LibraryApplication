@@ -18,9 +18,12 @@ import {
     TouchableWithoutFeedback,
     View
 } from 'react-native';
+import BorrowErrorDialog from '../../components/BorrowErrorDialog';
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
+import { getDaysUntilOverdue, getRenewalPeriodDescription } from '../../utils/RenewalUtils';
+import StatusSync from '../../utils/StatusSync';
 
 const MyBooks = () => {
   const router = useRouter();
@@ -47,12 +50,21 @@ const MyBooks = () => {
   // Detail dialog state
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [selectedBookDetail, setSelectedBookDetail] = useState(null);
+  // Error dialog state
+  const [errorDialog, setErrorDialog] = useState({ visible: false, type: null });
+  // Overdue detail dialog (styled like Overdue & Fines)
+  const [overdueDetailVisible, setOverdueDetailVisible] = useState(false);
+  const [overdueDetailBook, setOverdueDetailBook] = useState(null);
   // Borrowing history state
   const [borrowingHistory, setBorrowingHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Persist StatusSync listener reference for proper removal
+  const statusSyncCbRef = React.useRef(null);
   
   // Get user ID dynamically from storage
   const [userId, setUserId] = useState(null);
+  // User role for renewal period calculation
+  const [userRole, setUserRole] = useState(null);
 
   const PENDING_RENEWALS_KEY = 'pending_renewals_by_book';
 
@@ -72,6 +84,7 @@ const MyBooks = () => {
       if (userDataString) {
         const userData = JSON.parse(userDataString);
         setUserId(userData.id);
+        setUserRole(userData.role);
         return userData.id;
       }
       return null;
@@ -83,17 +96,21 @@ const MyBooks = () => {
 
   const loadReportedBooks = async (currentUserId) => {
     try {
-      const reportsRes = await ApiService.listLostDamagedReports({ 
-        userId: String(currentUserId || ''), 
-        status: 'all' 
-      }).catch(() => ({ data: [] }));
+      console.log('🔄 Loading lost/damaged reports...');
+      const reportsRes = await ApiService.getLostDamagedReports('all').catch(() => ({ data: [] }));
+      
+      console.log('📥 Raw reports response:', reportsRes);
       
       const reports = Array.isArray(reportsRes)
         ? reportsRes
         : (Array.isArray(reportsRes?.data) ? reportsRes.data : (reportsRes?.data?.reports || reportsRes?.reports || []));
       
+      console.log('📋 Processed reports array:', reports);
+      
       const reportedIndex = {};
-      (reports || []).forEach(r => {
+      (reports || []).forEach((r, index) => {
+        console.log(`📄 Processing report ${index}:`, r);
+        
         const txn = String(r.transactionId || r.borrowTransactionId || r.transaction_id || '');
         const copy = String(r.bookCopyId || r.copyId || r.copy_id || '');
         const bookId = String(r.bookId || r.book_id || '');
@@ -109,27 +126,34 @@ const MyBooks = () => {
           bookId: bookId
         };
         
+        console.log(`📄 Normalized report ${index}:`, normalizedReport);
+        
         // Index by multiple identifiers for better matching
         if (txn) reportedIndex[`txn:${txn}`] = normalizedReport;
         if (copy) reportedIndex[`copy:${copy}`] = normalizedReport;
         if (bookId) reportedIndex[`book:${bookId}`] = normalizedReport;
       });
       
-      console.log('Loaded reported books:', reportedIndex);
+      console.log('📚 Final reported books index:', reportedIndex);
       setReportedBooks(reportedIndex);
     } catch (e) {
-      console.error('Error loading reported books:', e);
+      console.error('❌ Error loading reported books:', e);
       setReportedBooks({});
     }
   };
 
-  const loadBorrowingHistory = async () => {
+  const loadBorrowingHistory = async (forceRefresh = false) => {
     try {
       setHistoryLoading(true);
       const currentUserId = userId || await loadUserId();
       if (!currentUserId) {
         throw new Error('User ID not available. Please log in again.');
       }
+      
+      console.log('🔄 Loading borrowing history, forceRefresh:', forceRefresh);
+      
+      // Load reported books first (this will get fresh data from API)
+      await loadReportedBooks(currentUserId);
       
       const response = await ApiService.getUserBooks(currentUserId, { status: 'all', includeHistory: true });
       
@@ -188,17 +212,22 @@ const MyBooks = () => {
     }
   };
 
-  // Enhanced refresh that also updates report statuses
+  // Enhanced refresh that also updates report statuses and real-time status
   const refreshAllData = async () => {
     setRefreshing(true);
     try {
       const currentUserId = userId || await loadUserId();
       if (currentUserId) {
-        // Refresh both books and reports data
+        console.log('🔄 Force refreshing all data with real-time status updates...');
+        // Refresh both books and reports data with force refresh
         await Promise.all([
           loadUserBooks(true),
-          loadReportedBooks(currentUserId)
+          loadReportedBooks(currentUserId),
+          loadBorrowingHistory(true)
         ]);
+        // Also sync renewal statuses to catch any approved renewals
+        await syncRenewalStatuses();
+        console.log('✅ Force refresh completed with real-time status updates');
       }
     } catch (error) {
       console.error('Error refreshing data:', error);
@@ -220,6 +249,23 @@ const MyBooks = () => {
       await loadUserBooks();
       // Initial sync to reflect server-approved/rejected renewals
       await syncRenewalStatuses();
+      
+      // Set up real-time status synchronization
+      statusSyncCbRef.current = (syncData) => {
+        console.log('📡 MyBooks: Received real-time status update');
+        if (syncData.borrowedBooks && syncData.borrowedBooks.success) {
+          // Update books data with fresh status
+          setBooks({
+            borrowed: syncData.borrowedBooks.data?.borrowedBooks || [],
+            returned: syncData.borrowedBooks.data?.returnedBooks || [],
+            overdue: syncData.borrowedBooks.data?.overdueBooks || []
+          });
+        }
+      };
+      
+      StatusSync.addListener(statusSyncCbRef.current);
+      StatusSync.startSync();
+      
       const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
       intervalId = setInterval(() => {
         loadUserBooks(true);
@@ -227,17 +273,32 @@ const MyBooks = () => {
       // Check renewal statuses frequently to clear local pending when approved/rejected/cancelled
       renewCheckId = setInterval(() => {
         syncRenewalStatuses();
-      }, 20000);
+      }, 10000); // Check every 10 seconds instead of 20
     };
     initializeData();
     return () => {
       if (intervalId) clearInterval(intervalId);
       if (renewCheckId) clearInterval(renewCheckId);
+      if (statusSyncCbRef.current) {
+        StatusSync.removeListener(statusSyncCbRef.current);
+        statusSyncCbRef.current = null;
+      }
     };
   }, []);
 
   const handleReturnBook = async () => {
     Alert.alert('In-Person Return', 'Please return books at the library circulation desk.');
+  };
+
+  // Handle error dialog actions
+  const handleErrorDialogViewFines = () => {
+    setErrorDialog({ visible: false, type: null });
+    router.push('/overdue-fines');
+  };
+
+  const handleErrorDialogViewMyBooks = () => {
+    setErrorDialog({ visible: false, type: null });
+    // Already on my books page, just close dialog
   };
 
   const handleRenewBook = async (book) => {
@@ -247,6 +308,14 @@ const MyBooks = () => {
         Alert.alert('Error', 'User ID not available. Please log in again.');
         return;
       }
+      // Block renewals if user has any overdue items
+      try {
+        const has = await ApiService.hasOverdueBooks(currentUserId);
+        if (has) {
+          setErrorDialog({ visible: true, type: 'overdue_books' });
+          return;
+        }
+      } catch {}
       const resolvedCopyId = book.copyId || (book.copy && book.copy.id);
       const resolvedBookId = book.bookId || (book.book && book.book.id);
       if (!resolvedBookId) {
@@ -265,9 +334,11 @@ const MyBooks = () => {
         return;
       }
 
+      const renewalPeriod = getRenewalPeriodDescription(userRole);
+      
       Alert.alert(
         'Renew Book',
-        `Renew "${book.bookTitle}" for another period?`,
+        `Renew "${book.bookTitle}" for another ${renewalPeriod}?`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -285,9 +356,10 @@ const MyBooks = () => {
                   savePendingRenewals(next);
                   return next;
                 });
+                const renewalPeriod = getRenewalPeriodDescription(userRole);
                 Alert.alert(
                   'Request Submitted',
-                  'Renewal request submitted for librarian approval.',
+                  `Renewal request submitted for librarian approval. If approved, you'll get an additional ${renewalPeriod}.`,
                   [
                     { text: 'OK' },
                     { text: 'View Renewal Requests', onPress: () => router.push('/borrowing/my-requests?tab=renewal') }
@@ -360,9 +432,14 @@ const MyBooks = () => {
     try {
       const currentUserId = userId || await loadUserId();
       if (!currentUserId) return;
+      
+      console.log('🔄 Syncing renewal statuses...');
       const res = await ApiService.getUserRenewalRequests(currentUserId);
       const rows = Array.isArray(res) ? res : (res?.data?.renewals || res?.renewals || res?.data || []);
       if (!Array.isArray(rows)) return;
+      
+      console.log('📋 Found renewal requests:', rows.length);
+      
       const byBook = {};
       rows.forEach(r => {
         const bId = r.bookId || (r.book && r.book.id);
@@ -370,24 +447,57 @@ const MyBooks = () => {
         if (!byBook[bId]) byBook[bId] = [];
         byBook[bId].push(r);
       });
+      
       let changed = false;
       const next = { ...pendingRenewals };
+      const approvedBooks = [];
+      
       Object.keys(next).forEach(bookId => {
         const reqs = byBook[bookId] || [];
         const anyPending = reqs.some(r => (String(r.status).toUpperCase() === 'PENDING'));
+        const anyApproved = reqs.some(r => (String(r.status).toUpperCase() === 'APPROVED'));
+        
+        console.log(`📋 Book ${bookId}: pending=${anyPending}, approved=${anyApproved}`);
+        
         if (!anyPending) {
           delete next[bookId];
           changed = true;
+          
+          if (anyApproved) {
+            approvedBooks.push(bookId);
+            console.log(`✅ Book ${bookId} renewal was approved`);
+          }
         }
       });
+      
       if (changed) {
+        console.log('📋 Updating pending renewals state:', next);
         setPendingRenewals(next);
         savePendingRenewals(next);
-        // If something transitioned out of PENDING (e.g., APPROVED), refresh books to show updated due date
-        loadUserBooks(true);
+        
+        // If any renewals were approved, refresh books to show updated due date
+        if (approvedBooks.length > 0) {
+          console.log('🔄 Refreshing books due to approved renewals:', approvedBooks);
+          
+          // Show success notification to user
+          Alert.alert(
+            'Renewal Approved! 🎉',
+            `Your renewal request${approvedBooks.length > 1 ? 's have' : ' has'} been approved. Your due date${approvedBooks.length > 1 ? 's have' : ' has'} been extended.`,
+            [{ text: 'OK' }]
+          );
+          
+          // Force a complete refresh to get updated due dates
+          await loadUserBooks(true);
+          
+          // Additional refresh after a short delay to ensure server data is updated
+          setTimeout(async () => {
+            console.log('🔄 Secondary refresh for approved renewals');
+            await loadUserBooks(true);
+          }, 2000);
+        }
       }
     } catch (e) {
-      // silent fail; background sync only
+      console.log('⚠️ Error syncing renewal statuses:', e?.message);
     }
   };
 
@@ -411,8 +521,11 @@ const MyBooks = () => {
     if (pendingRenewals[book.bookId || (book.book && book.book.id)]) return 'Renewal pending';
     const effectiveDue = book.dueDate;
     const daysRemaining = getDaysRemaining(effectiveDue);
+    const daysUntilOverdue = getDaysUntilOverdue(effectiveDue, userRole);
+    
     if (book.status === 'overdue' || daysRemaining <= 0) return 'Due today';
     if (daysRemaining === 1) return 'Due tomorrow';
+    if (daysUntilOverdue <= 0) return 'Overdue';
     if (daysRemaining <= 3) return `${daysRemaining} days remaining`;
     return `${daysRemaining} days remaining`;
   };
@@ -422,9 +535,27 @@ const MyBooks = () => {
     const copyId = book.copyId || (book.copy && book.copy.id);
     const transactionId = book.transactionId || book.borrowTransactionId;
     
-    return reportedBooks[`txn:${String(transactionId)}`] || 
-           reportedBooks[`copy:${String(copyId)}`] || 
-           reportedBooks[`book:${String(bookId)}`];
+    const txnKey = `txn:${String(transactionId)}`;
+    const copyKey = `copy:${String(copyId)}`;
+    const bookKey = `book:${String(bookId)}`;
+    
+    console.log('🔍 Checking if book is reported:', {
+      bookTitle: book.bookTitle,
+      bookId,
+      copyId,
+      transactionId,
+      txnKey,
+      copyKey,
+      bookKey,
+      'reportedBooks keys': Object.keys(reportedBooks),
+      'txn match': reportedBooks[txnKey],
+      'copy match': reportedBooks[copyKey],
+      'book match': reportedBooks[bookKey]
+    });
+    
+    return reportedBooks[txnKey] || 
+           reportedBooks[copyKey] || 
+           reportedBooks[bookKey];
   };
 
   const getReportStatus = (book) => {
@@ -435,25 +566,54 @@ const MyBooks = () => {
     const reportType = String(report.reportType || 'LOST').toUpperCase();
     const resolutionType = String(report.resolutionType || '').toUpperCase();
     
-    // Enhanced status mapping with better synchronization
+    console.log('📋 Report status check:', {
+      bookTitle: book.bookTitle,
+      status,
+      reportType,
+      resolutionType,
+      report,
+      rawStatus: report.status,
+      rawResolutionType: report.resolutionType,
+      reportId: report.id,
+      resolutionDate: report.resolutionDate,
+      librarianName: report.librarianName
+    });
+    
+    // Debug: Check what status we're actually getting
+    console.log('🔍 Status debugging:', {
+      'report.status': report.status,
+      'String(report.status)': String(report.status),
+      'status.toUpperCase()': String(report.status).toUpperCase(),
+      'status === "ON_PROCESS"': String(report.status).toUpperCase() === 'ON_PROCESS',
+      'status === "PENDING"': String(report.status).toUpperCase() === 'PENDING',
+      'status === "RESOLVED"': String(report.status).toUpperCase() === 'RESOLVED'
+    });
+    
+    // Enhanced status mapping based on API documentation
     // Check for resolved status first, as it takes priority
     if (status === 'RESOLVED') {
-      if (resolutionType === 'FINE_PAID') {
-        return { text: 'Fine Paid', color: '#28A745', icon: 'check-circle' };
-      } else if (resolutionType === 'WAIVED') {
-        return { text: 'Fine Waived', color: '#17A2B8', icon: 'information' };
+      // Only show "Fine Paid" if there's a resolution date and librarian processed it
+      if (report.resolutionDate && report.librarianName) {
+        if (resolutionType === 'FINE_PAID_COMPLETE') {
+          return { text: 'Fine Paid Complete', color: '#28A745', icon: 'check-circle' };
+        } else if (resolutionType === 'FINE_PAID') {
+          return { text: 'Fine Paid', color: '#28A745', icon: 'check-circle' };
+        } else if (resolutionType === 'REPLACEMENT') {
+          return { text: 'Replacement Required', color: '#17A2B8', icon: 'book-plus' };
+        } else if (resolutionType === 'WAIVED') {
+          return { text: 'Fine Waived', color: '#17A2B8', icon: 'information' };
+        } else if (resolutionType === 'PARTIAL_PAYMENT') {
+          return { text: 'Partial Payment', color: '#F59E0B', icon: 'currency-usd' };
+        }
+        return { text: 'Resolved', color: '#28A745', icon: 'check-circle' };
+      } else {
+        // If RESOLVED but no resolution date or librarian, treat as ON_PROCESS
+        return { text: 'Processing Payment', color: '#3B82F6', icon: 'clock-outline' };
       }
-      return { text: 'Resolved', color: '#28A745', icon: 'check-circle' };
+    } else if (status === 'ON_PROCESS') {
+      return { text: 'Processing Payment', color: '#3B82F6', icon: 'clock-outline' };
     } else if (status === 'PENDING') {
       return { text: 'Under Review', color: '#FFA500', icon: 'clock-outline' };
-    } else if (status === 'PROCESSED') {
-      return { text: 'Processed', color: '#6B7280', icon: 'cog-outline' };
-    } else if (status === 'RETURNED_LOST') {
-      return { text: 'Returned (Marked as Lost)', color: '#DC2626', icon: 'book-off' };
-    } else if (status === 'RETURNED_DAMAGED') {
-      return { text: 'Returned (Marked as Damaged)', color: '#F59E0B', icon: 'wrench' };
-    } else if (status === 'COMPLETED') {
-      return { text: 'Report Completed', color: '#10B981', icon: 'check-circle' };
     } else if (status === 'CANCELLED') {
       return { text: 'Report Cancelled', color: '#6B7280', icon: 'close-circle' };
     }
@@ -599,19 +759,9 @@ const MyBooks = () => {
   };
 
   const handleViewFines = (book) => {
-    const daysOverdue = Math.abs(getDaysRemaining(book.dueDate));
-    Alert.alert(
-      'Overdue Fine Details',
-      `📚 ${book.bookTitle}\n\n` +
-      `⏰ Days Overdue: ${daysOverdue}\n` +
-      `💰 Current Fine: $${book.fineAmount ? book.fineAmount.toFixed(2) : '0.00'}\n` +
-      `📅 Due Date: ${new Date(book.dueDate).toLocaleDateString()}\n\n` +
-      `Please return this book as soon as possible to avoid additional fines.`,
-      [
-        { text: 'Return Info', onPress: () => handleReturnBook(book) },
-        { text: 'OK' }
-      ]
-    );
+    // Open rich detail dialog instead of simple alert
+    setOverdueDetailBook(book);
+    setOverdueDetailVisible(true);
   };
 
   const submitReport = async () => {
@@ -746,6 +896,82 @@ const MyBooks = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContainer}
       />
+
+      {/* Overdue Detail Dialog (parity with Overdue & Fines module) */}
+      <Modal
+        visible={overdueDetailVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setOverdueDetailVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.detailModalContent}>
+            <View style={styles.detailModalHeader}>
+              <Text style={styles.detailModalTitle}>Overdue Details</Text>
+              <TouchableOpacity 
+                style={styles.detailModalClose}
+                onPress={() => {
+                  setOverdueDetailVisible(false);
+                  setOverdueDetailBook(null);
+                }}
+              >
+                <MaterialCommunityIcons name="close" size={24} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            {overdueDetailBook ? (
+              <View style={styles.bookDetailContainer}>
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={styles.bookDetailTitle}>{overdueDetailBook.bookTitle || overdueDetailBook.title}</Text>
+                  <Text style={styles.bookDetailAuthor}>by {overdueDetailBook.bookAuthor || overdueDetailBook.author}</Text>
+                </View>
+
+                <View style={styles.bookDetailInfo}>
+                  <View style={styles.detailItem}>
+                    <MaterialCommunityIcons name="calendar" size={20} color="#3b82f6" />
+                    <View style={styles.detailItemContent}>
+                      <Text style={styles.detailItemLabel}>Due Date</Text>
+                      <Text style={styles.detailItemValue}>{new Date(overdueDetailBook.dueDate).toLocaleDateString()}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailItem}>
+                    <MaterialCommunityIcons name="clock-alert" size={20} color="#dc2626" />
+                    <View style={styles.detailItemContent}>
+                      <Text style={styles.detailItemLabel}>Days Overdue</Text>
+                      <Text style={[styles.detailItemValue, { color: '#dc2626' }]}>{Math.abs(getDaysRemaining(overdueDetailBook.dueDate))}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.detailItem}>
+                    <MaterialCommunityIcons name="currency-usd" size={20} color="#dc2626" />
+                    <View style={styles.detailItemContent}>
+                      <Text style={styles.detailItemLabel}>Fine</Text>
+                      <Text style={[styles.detailItemValue, { color: '#dc2626' }]}>
+                        ${Number(overdueDetailBook.fineAmount || 0).toFixed(2)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {overdueDetailBook.copyNumber && (
+                    <View style={styles.detailItem}>
+                      <MaterialCommunityIcons name="file-document" size={20} color="#3b82f6" />
+                      <View style={styles.detailItemContent}>
+                        <Text style={styles.detailItemLabel}>Copy Number</Text>
+                        <Text style={styles.detailItemValue}>{overdueDetailBook.copyNumber}</Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              </View>
+            ) : (
+              <View style={{ padding: 20, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#3b82f6" />
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* Detail/History Modal */}
       <Modal
@@ -995,6 +1221,15 @@ const MyBooks = () => {
       </Modal>
 
       {/* Online return disabled: no condition assessment modal */}
+
+      {/* Error Dialog */}
+      <BorrowErrorDialog
+        visible={errorDialog.visible}
+        onClose={() => setErrorDialog({ visible: false, type: null })}
+        errorType={errorDialog.type}
+        onViewFines={handleErrorDialogViewFines}
+        onViewMyBooks={handleErrorDialogViewMyBooks}
+      />
 
       {/* Note */}
       <Text style={styles.note}>

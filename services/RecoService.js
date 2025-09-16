@@ -7,11 +7,20 @@ const LIMIT = 10;
 // Enhanced action logging with more detailed information
 export async function logAction(action) {
   try {
+    // Get current user ID to ensure data isolation
+    const user = await ApiService.getCurrentUser();
+    if (!user || !user.id) {
+      console.warn('Cannot log action: No authenticated user');
+      return;
+    }
+
+    const userKey = `${KEY}_${user.id}`;
     const now = new Date().toISOString();
-    const raw = await AsyncStorage.getItem(KEY);
+    const raw = await AsyncStorage.getItem(userKey);
     const arr = raw ? JSON.parse(raw) : [];
     const item = {
       t: now,
+      userId: user.id, // Store user ID for additional verification
       type: action.type, // 'borrow' | 'reserve' | 'view' | 'search'
       bookId: action.bookId,
       title: action.title || null,
@@ -27,7 +36,7 @@ export async function logAction(action) {
       duration: action.duration || null, // How long they kept the book
     };
     const next = [item, ...arr].slice(0, LIMIT);
-    await AsyncStorage.setItem(KEY, JSON.stringify(next));
+    await AsyncStorage.setItem(userKey, JSON.stringify(next));
   } catch (error) {
     console.error('Error logging recommendation action:', error);
   }
@@ -36,8 +45,28 @@ export async function logAction(action) {
 // Get local hints for fallback recommendations
 export async function getHints() {
   try {
-    const raw = await AsyncStorage.getItem(KEY);
+    // Get current user ID to ensure data isolation
+    const user = await ApiService.getCurrentUser();
+    if (!user || !user.id) {
+      console.warn('Cannot get hints: No authenticated user');
+      return { 
+        categories: [], 
+        authors: [], 
+        publishers: [],
+        subjects: [],
+        shelfPrefixes: [], 
+        shelfLocations: [],
+        ddcPrefixes: []
+      };
+    }
+
+    const userKey = `${KEY}_${user.id}`;
+    const raw = await AsyncStorage.getItem(userKey);
     const arr = raw ? JSON.parse(raw) : [];
+    
+    // Filter actions to ensure they belong to current user
+    const userActions = arr.filter(a => a.userId === user.id);
+    
     const hints = {
       categories: [], 
       authors: [], 
@@ -48,7 +77,7 @@ export async function getHints() {
       ddcPrefixes: []
     };
     
-    for (const a of arr) {
+    for (const a of userActions) {
       if (a.category) hints.categories.push(a.category);
       if (a.author) hints.authors.push(a.author);
       if (a.publisher) hints.publishers.push(a.publisher);
@@ -241,9 +270,11 @@ function generateRecommendationReasons(matchFactors, book, userHistory) {
 export async function getIntelligentRecommendations() {
   try {
     const user = await ApiService.getCurrentUser();
-    if (!user) {
+    if (!user || !user.id) {
       throw new Error('User not authenticated');
     }
+
+    console.log(`🔍 Fetching recommendations for user: ${user.id}`);
 
     const response = await fetch(`${ApiService.API_BASE}/api/mobile/users/${user.id}/recommendations`, {
       method: 'GET',
@@ -252,7 +283,7 @@ export async function getIntelligentRecommendations() {
     });
 
     if (!response.ok) {
-      throw new Error('Failed to fetch recommendations');
+      throw new Error(`Failed to fetch recommendations: ${response.status}`);
     }
 
     const data = await response.json();
@@ -260,6 +291,7 @@ export async function getIntelligentRecommendations() {
       throw new Error(data.message || 'Failed to get recommendations');
     }
 
+    console.log(`✅ Received ${data.data?.recommendations?.length || 0} recommendations for user ${user.id}`);
     return data.data;
   } catch (error) {
     console.error('Error fetching intelligent recommendations:', error);
@@ -271,12 +303,16 @@ export async function getIntelligentRecommendations() {
 // Fallback recommendations using local hints
 export async function getFallbackRecommendations() {
   try {
-    const hints = await getHints();
     const user = await ApiService.getCurrentUser();
     
-    if (!user) {
-      return { recommendations: [], preferences: {} };
+    if (!user || !user.id) {
+      console.warn('Cannot get fallback recommendations: No authenticated user');
+      return { recommendations: [], preferences: {}, analysis: { source: 'no_user' } };
     }
+
+    console.log(`🔄 Getting fallback recommendations for user: ${user.id}`);
+    
+    const hints = await getHints();
 
     // Get available books for fallback recommendations
     const response = await fetch(`${ApiService.API_BASE}/api/books?status=ACTIVE&available=true`, {
@@ -293,6 +329,8 @@ export async function getFallbackRecommendations() {
 
     // Get user history for better recommendations
     const userHistory = await getUserBorrowingHistory();
+    
+    console.log(`📚 Found ${books.length} books, ${userHistory.length} user history items, ${hints.categories.length} category hints`);
     
     // Rank books using local hints with percentage-based matching
     const rankedBooks = rankRecommendations(books, hints, userHistory);
@@ -313,6 +351,7 @@ export async function getFallbackRecommendations() {
         recommendationCount: rankedBooks.length,
         lastUpdated: new Date().toISOString(),
         source: 'fallback',
+        userId: user.id,
         averageMatchPercentage: rankedBooks.length > 0 ? Math.round(rankedBooks.reduce((sum, book) => sum + book.matchPercentage, 0) / rankedBooks.length) : 0
       }
     };
@@ -326,7 +365,12 @@ export async function getFallbackRecommendations() {
 async function getUserBorrowingHistory() {
   try {
     const user = await ApiService.getCurrentUser();
-    if (!user) return [];
+    if (!user || !user.id) {
+      console.warn('Cannot get borrowing history: No authenticated user');
+      return [];
+    }
+
+    console.log(`📖 Fetching borrowing history for user: ${user.id}`);
 
     const response = await fetch(`${ApiService.API_BASE}/api/borrow-transactions?userId=${user.id}`, {
       method: 'GET',
@@ -341,7 +385,9 @@ async function getUserBorrowingHistory() {
     const data = await response.json();
     if (!data.success) return [];
 
-    return data.data || [];
+    const history = data.data || [];
+    console.log(`📚 Found ${history.length} borrowing history items for user ${user.id}`);
+    return history;
   } catch (error) {
     console.error('Error fetching user borrowing history:', error);
     return [];
@@ -367,6 +413,37 @@ export async function logUserInteraction(interaction) {
     });
   } catch (error) {
     console.error('Error logging user interaction:', error);
+  }
+}
+
+// Clear recommendation data for a specific user (useful for logout)
+export async function clearUserRecommendationData(userId) {
+  try {
+    if (!userId) {
+      console.warn('Cannot clear recommendation data: No user ID provided');
+      return;
+    }
+
+    const userKey = `${KEY}_${userId}`;
+    await AsyncStorage.removeItem(userKey);
+    console.log(`🗑️ Cleared recommendation data for user: ${userId}`);
+  } catch (error) {
+    console.error('Error clearing user recommendation data:', error);
+  }
+}
+
+// Clear all recommendation data (useful for logout or data cleanup)
+export async function clearAllRecommendationData() {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const recoKeys = keys.filter(key => key.startsWith(KEY));
+    
+    if (recoKeys.length > 0) {
+      await AsyncStorage.multiRemove(recoKeys);
+      console.log(`🗑️ Cleared ${recoKeys.length} recommendation data entries`);
+    }
+  } catch (error) {
+    console.error('Error clearing all recommendation data:', error);
   }
 }
 

@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import ApiService from '../../services/ApiService';
@@ -7,6 +8,7 @@ export default function PaymentScreen({ route }) {
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('Cash');
   const [submitting, setSubmitting] = useState(false);
+  const router = useRouter();
 
   const submit = async () => {
     try {
@@ -22,7 +24,15 @@ export default function PaymentScreen({ route }) {
         body: JSON.stringify({ amount: Number(amount), paymentMethod: method, notes: 'Payment via mobile app' })
       });
       const data = await ApiService.handleApiResponse(res, 'pay-fine');
-      Alert.alert('Success', data?.data?.message || 'Payment processed');
+      Alert.alert('Success', data?.data?.message || 'Payment processed', [
+        {
+          text: 'OK',
+          onPress: () => {
+            // Navigate back to overdue-fines page to refresh the data
+            router.replace('/overdue-fines');
+          }
+        }
+      ]);
     } catch (err) {
       Alert.alert('Error', err.message || 'Payment failed (backend pending)');
     } finally {

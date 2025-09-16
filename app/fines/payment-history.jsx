@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text,
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
+import { formatPeso } from '../../utils/CurrencyUtils';
 
 export default function PaymentHistoryScreen() {
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -103,7 +104,7 @@ export default function PaymentHistoryScreen() {
           <>
             <View style={styles.summaryCard}>
               <Text style={styles.summaryTitle}>Total Paid</Text>
-              <Text style={styles.summaryAmount}>₱{totalPaid.toFixed(2)}</Text>
+              <Text style={styles.summaryAmount}>{formatPeso(totalPaid)}</Text>
               <Text style={styles.summarySubtext}>
                 {paidFines.length} {paidFines.length === 1 ? 'payment' : 'payments'} completed
               </Text>
@@ -133,7 +134,7 @@ export default function PaymentHistoryScreen() {
                       </Text>
                     </View>
                     <Text style={styles.paymentAmount}>
-                      ₱{fine.amountPaid.toFixed(2)}
+                      {formatPeso(fine.amountPaid)}
                     </Text>
                   </View>
                   
@@ -147,7 +148,7 @@ export default function PaymentHistoryScreen() {
                     <View style={styles.detailRow}>
                       <Text style={styles.detailLabel}>Original Amount:</Text>
                       <Text style={styles.detailValue}>
-                        ₱{fine.amount.toFixed(2)}
+                        {formatPeso(fine.amount)}
                       </Text>
                     </View>
                     {fine.paymentMethod && (

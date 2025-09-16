@@ -3,16 +3,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import BookConditionsView from '../../components/BookConditionsView';
+import BorrowErrorDialog from '../../components/BorrowErrorDialog';
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
@@ -32,6 +33,12 @@ const BookReservationScreen = () => {
   const [reservations, setReservations] = useState([]);
   const [loadingReservations, setLoadingReservations] = useState(false);
   const [forceReservationsView, setForceReservationsView] = useState(false);
+  const [hasOverdues, setHasOverdues] = useState(false);
+  const [errorDialog, setErrorDialog] = useState({ visible: false, type: null });
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [userBorrowedCopyIds, setUserBorrowedCopyIds] = useState(new Set());
+  const [loadingCopyId, setLoadingCopyId] = useState(null);
+  const [myBorrowedBookIds, setMyBorrowedBookIds] = useState(new Set());
   const router = useRouter();
 
   // Initialize tab from query param on first render
@@ -83,6 +90,58 @@ const BookReservationScreen = () => {
     }
   };
 
+  // Load user's borrowed copy IDs to check for self-reservation
+  const loadUserBorrowedCopyIds = async (userId) => {
+    try {
+      console.log('📚 Loading user borrowed copy IDs for userId:', userId);
+      const response = await ApiService.getUserBooks(userId, { status: 'all', includeHistory: false });
+      
+      const borrowedCopyIds = new Set();
+      const borrowedBookIds = new Set();
+      
+      if (response.success && response.data) {
+        // The API returns response.data.borrowedBooks, not just response.data
+        const borrowedBooks = response.data.borrowedBooks || [];
+        console.log('📋 Raw borrowed books from API:', borrowedBooks);
+        
+        borrowedBooks.forEach(book => {
+          // The copy ID field is book.copyId based on the my-books implementation
+          const copyId = book.copyId || book.copy_id || book.copy?.id || book.bookCopyId;
+          if (copyId) {
+            borrowedCopyIds.add(String(copyId));
+            console.log('📋 Added copy ID to set:', String(copyId), 'from book:', {
+              bookId: book.id || book.bookId,
+              bookTitle: book.title || book.bookTitle,
+              copyId: copyId,
+              allFields: Object.keys(book)
+            });
+          } else {
+            console.log('⚠️ No copy ID found in book:', {
+              bookId: book.id || book.bookId,
+              bookTitle: book.title || book.bookTitle,
+              allFields: Object.keys(book)
+            });
+          }
+          
+          // Collect book IDs for "Currently Borrowed" status
+          const bookId = book.bookId || book.book_id || book.id;
+          if (bookId) {
+            borrowedBookIds.add(String(bookId));
+          }
+        });
+      }
+      
+      setUserBorrowedCopyIds(borrowedCopyIds);
+      setMyBorrowedBookIds(borrowedBookIds);
+      console.log('📋 Final user borrowed copy IDs:', Array.from(borrowedCopyIds));
+      console.log('📚 Final user borrowed book IDs:', Array.from(borrowedBookIds));
+    } catch (err) {
+      console.error('❌ Error loading user borrowed copy IDs:', err);
+      setUserBorrowedCopyIds(new Set());
+      setMyBorrowedBookIds(new Set());
+    }
+  };
+
   // Load book details
   useEffect(() => {
     if (bookId && activeTab !== 'RESERVATIONS') {
@@ -96,6 +155,23 @@ const BookReservationScreen = () => {
       console.log('🚫 Skipping book details load - activeTab is RESERVATIONS');
     }
   }, [bookId, activeTab]);
+
+  // Pre-check overdue status and load user data once when screen mounts
+  useEffect(() => {
+    (async () => {
+      try {
+        const has = await ApiService.hasOverdueBooks();
+        setHasOverdues(Boolean(has));
+        
+        // Load current user ID and their borrowed copy IDs
+        const userId = await ApiService.getCurrentUserId();
+        if (userId) {
+          setCurrentUserId(userId);
+          await loadUserBorrowedCopyIds(userId);
+        }
+      } catch {}
+    })();
+  }, []);
 
   // Reset to BOOKS tab when no specific book (but not if we're on RESERVATIONS tab)
   useEffect(() => {
@@ -130,16 +206,37 @@ const BookReservationScreen = () => {
       if (bookResponse.success && bookResponse.data) {
         const bookData = bookResponse.data;
         
-        // Filter to only borrowed copies for reservation
-        const borrowedCopies = (bookData.copies || []).filter(copy => 
+        // Keep all copies for proper validation - don't filter here
+        const allCopies = bookData.copies || [];
+        const borrowedCopies = allCopies.filter(copy => 
           copy.status === 'BORROWED' || copy.status === 'borrowed'
         );
         
-        console.log(`📚 Found ${borrowedCopies.length} borrowed copies for reservation`);
-        console.log('📋 Sample borrowed copy data:', borrowedCopies[0]);
-        bookData.copies = borrowedCopies;
+        console.log(`📚 Total copies: ${allCopies.length}, Borrowed copies: ${borrowedCopies.length}`);
+        console.log('📋 All copy statuses:', allCopies.map(c => ({ id: c.id, status: c.status })));
+        
+        // Debug all copy IDs in the book copies
+        borrowedCopies.forEach((copy, index) => {
+          const copyId = String(copy.id || copy.copyId || copy.copy_id || '');
+          console.log(`📋 Copy ${index + 1} ID fields:`, {
+            id: copy.id,
+            copyId: copy.copyId,
+            copy_id: copy.copy_id,
+            extractedId: copyId,
+            allFields: Object.keys(copy)
+          });
+        });
+        
+        // Keep all copies for validation, but add a flag for display
+        bookData.copies = allCopies;
+        bookData.borrowedCopies = borrowedCopies; // For display purposes
         
         setBook(bookData);
+        
+        // Reload user's borrowed copy IDs to ensure we have the latest data
+        if (currentUserId) {
+          await loadUserBorrowedCopyIds(currentUserId);
+        }
       } else {
         throw new Error(bookResponse.message || 'Failed to load book details');
       }
@@ -165,18 +262,31 @@ const BookReservationScreen = () => {
             ? booksRes.data
             : [];
 
-        // Filter to books that have at least one borrowed copy
+        // Filter to books that have at least one borrowed copy (more accurate filtering)
         const booksWithBorrowed = booksArray.filter(b => {
           const total = Number(b.totalCopies ?? b.total_copies ?? b.total) || 0;
           const available = Number(b.availableCopies ?? b.available_copies ?? b.available) || 0;
-          return total > 0 && total - available > 0;
+          const borrowed = total - available;
+          
+          console.log('📚 Book filtering:', {
+            title: b.title || b.bookTitle,
+            total,
+            available,
+            borrowed,
+            shouldInclude: total > 0 && borrowed > 0
+          });
+          
+          // Include books that have borrowed copies (but don't require available === 0)
+          // The backend will handle the final validation
+          return total > 0 && borrowed > 0;
         });
 
         // Bind directly to list renderer by placing under copies key
         setBook({ 
           id: 'all-books', 
           title: 'Books With Borrowed Copies',
-          copies: booksWithBorrowed
+          copies: booksWithBorrowed,
+          borrowedCopies: booksWithBorrowed // For display purposes
         });
         return;
       }
@@ -191,6 +301,9 @@ const BookReservationScreen = () => {
   };
 
   const handleCopySelection = async (copy) => {
+    const copyId = String(copy.id || copy.copyId || copy.copy_id || '');
+    setLoadingCopyId(copyId);
+    
     try {
       // Get user ID to check for self-reservation
       const userDataString = await AsyncStorage.getItem('userData');
@@ -201,11 +314,31 @@ const BookReservationScreen = () => {
       const userData = JSON.parse(userDataString);
       const userId = userData.id;
 
+      // Block reserve when user has any overdue items
+      try {
+        const has = await ApiService.hasOverdueBooks(userId);
+        if (has) {
+          setErrorDialog({ visible: true, type: 'overdue_books' });
+          return;
+        }
+      } catch {}
+
       // Check if user is trying to reserve their own borrowed copy
-      if (copy.borrowedByUserId && copy.borrowedByUserId === userId) {
+      const possibleCopyIds = [
+        String(copy.id || ''),
+        String(copy.copyId || ''),
+        String(copy.copy_id || ''),
+        String(copy.qrCode || ''),
+        String(copy.qr_code || ''),
+        String(copy.copyNumber || ''),
+        String(copy.copy_number || '')
+      ].filter(id => id && id !== 'undefined' && id !== 'null');
+      
+      const isMyBorrowedCopy = possibleCopyIds.some(id => userBorrowedCopyIds.has(id));
+      if (isMyBorrowedCopy) {
         Alert.alert(
           'Cannot Reserve Your Own Copy',
-          `You are currently borrowing Copy #${copy.copyNumber} of "${book.title}".\n\nYou cannot reserve a copy that you are already borrowing. Please return the book first if you need to borrow it again.`,
+          `You are currently borrowing Copy #${copy.copyNumber || copy.copy_number || copy.id} of "${book.title}".\n\nYou cannot reserve a copy that you are already borrowing. Please return the book first if you need to borrow it again.`,
           [{ text: 'OK' }]
         );
       return;
@@ -216,12 +349,20 @@ const BookReservationScreen = () => {
     setConditionModalVisible(true);
     } catch (err) {
       handleErrorForUI(err, Alert.alert, 'Selection Failed');
+    } finally {
+      setLoadingCopyId(null);
     }
   };
 
   const handleReserveSubmit = async () => {
     try {
       setReserving(true);
+
+      if (hasOverdues) {
+        setErrorDialog({ visible: true, type: 'overdue_books' });
+        setReserving(false);
+        return;
+      }
       
       // Get user ID from storage
       const userDataString = await AsyncStorage.getItem('userData');
@@ -267,16 +408,121 @@ const BookReservationScreen = () => {
         // Non-blocking if fetch fails; continue
       }
 
-      // Check if book has available copies (should not be reservable)
-      if (book && book.copies) {
-        const availableCopies = book.copies.filter(copy => 
+      // Get fresh book data from backend to match backend validation
+      console.log('🔄 Fetching fresh book data to match backend validation...');
+      console.log('📚 Current book data before fresh fetch:', {
+        bookId: book.id,
+        title: book.title,
+        availableCopies: book.availableCopies,
+        totalCopies: book.totalCopies,
+        copiesLength: book.copies?.length,
+        copyStatuses: book.copies?.map(c => c.status) || []
+      });
+      
+      let freshBook = book;
+      try {
+        // Force completely fresh data - bypass ALL caching
+        console.log('🌐 Making completely fresh API call with cache busting...');
+        ApiService.clearCatalogCache();
+        
+        // Add timestamp to force fresh data
+        const timestamp = Date.now();
+        const randomParam = Math.random().toString(36).substring(7);
+        
+        // Try the exact same endpoint the backend uses for validation
+        const freshEndpoint = `https://kcmi-library-system.vercel.app/api/books/${book.id}?t=${timestamp}&r=${randomParam}&_bust=${Date.now()}`;
+        
+        console.log(`🌐 Making fresh API call: ${freshEndpoint}`);
+        const freshResponse = await fetch(freshEndpoint, {
+          method: 'GET',
+          headers: {
+            ...await ApiService.getAuthHeaders(),
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
+        
+        console.log('📡 Fresh API response status:', freshResponse.status);
+        
+        if (freshResponse.ok) {
+          const freshData = await freshResponse.json();
+          console.log('📡 Fresh API response data:', {
+            success: freshData.success,
+            hasData: !!freshData.data,
+            availableCopies: freshData.data?.availableCopies,
+            totalCopies: freshData.data?.totalCopies,
+            copiesLength: freshData.data?.copies?.length,
+            allCopyStatuses: freshData.data?.copies?.map(c => c.status) || []
+          });
+          
+          if (freshData.success && freshData.data) {
+            freshBook = freshData.data;
+            console.log('✅ Fresh API data loaded from backend (backend-aligned)');
+          } else {
+            console.log('❌ Fresh API call failed - no data returned');
+          }
+        } else {
+          console.log('❌ Fresh API call failed with status:', freshResponse.status);
+        }
+      } catch (error) {
+        console.log('⚠️ Error with fresh API calls:', error.message);
+      }
+      
+      // Fallback to cached API call if direct call failed
+      if (freshBook === book) {
+        try {
+          const freshBookData = await ApiService.getBookById(book.id);
+          if (freshBookData.success && freshBookData.data) {
+            freshBook = freshBookData.data;
+            console.log('✅ Cached API data loaded from backend');
+          } else {
+            console.log('⚠️ Could not fetch fresh book data, using cached data');
+          }
+        } catch (error) {
+          console.log('⚠️ Error fetching fresh book data:', error.message);
+          // Continue with cached data if fresh data fails
+        }
+      }
+
+      // Enhanced validation to match backend logic exactly
+      if (freshBook && freshBook.copies) {
+        // Use the exact same fields the backend uses
+        const freshAvailableCount = freshBook.availableCopies || freshBook.available_copies || 0;
+        const freshTotalCopies = freshBook.totalCopies || freshBook.total_copies || freshBook.copies.length;
+        
+        // Also calculate from copies array for comparison
+        const availableCopies = freshBook.copies.filter(copy => 
           copy.status === 'available' || copy.status === 'AVAILABLE'
         );
         
-        if (availableCopies.length > 0) {
+        const borrowedCopies = freshBook.copies.filter(copy => 
+          copy.status === 'BORROWED' || copy.status === 'borrowed'
+        );
+        
+        const calculatedAvailableCount = availableCopies.length;
+        
+        console.log('📊 Fresh book availability check (backend logic):', {
+          totalCopies: freshTotalCopies,
+          availableCopies: freshAvailableCount,
+          calculatedAvailableCount,
+          borrowedCopies: borrowedCopies.length,
+          bookId: freshBook.id,
+          allCopyStatuses: freshBook.copies.map(c => ({ id: c.id, status: c.status })),
+          backendCondition: `${freshAvailableCount} >= ${freshTotalCopies} = ${freshAvailableCount >= freshTotalCopies}`,
+          // Debug: Check if backend uses different field names
+          availableCopiesField: freshBook.availableCopies,
+          totalCopiesField: freshBook.totalCopies,
+          available_copiesField: freshBook.available_copies,
+          total_copiesField: freshBook.total_copies
+        });
+        
+        // Backend logic: if availableCopies >= totalCopies, reject reservation
+        if (freshAvailableCount >= freshTotalCopies) {
+          console.log('❌ Blocking reservation: Backend shows all copies are available');
           Alert.alert(
             'Book Available for Direct Borrowing',
-            `This book has ${availableCopies.length} available copy(ies). You can borrow it directly from the library instead of reserving.\n\nReservations are only for copies that are currently borrowed by other users.`,
+            'All copies of this book are currently available. You can borrow it directly from the library instead of reserving.',
             [
               { text: 'Cancel', style: 'cancel' },
               { 
@@ -285,7 +531,7 @@ const BookReservationScreen = () => {
                   setConditionModalVisible(false);
                   router.push({
                     pathname: '/book-catalog/details',
-                    params: { id: book.id }
+                    params: { id: freshBook.id }
                   });
                 }
               }
@@ -294,11 +540,38 @@ const BookReservationScreen = () => {
           return;
         }
 
+        // If no borrowed copies, don't allow reservation
+        if (borrowedCopies.length === 0) {
+          console.log('❌ Blocking reservation: No borrowed copies available');
+          Alert.alert(
+            'No Reservations Available',
+            'All copies of this book are currently available. You can borrow it directly instead of reserving.',
+            [
+              { text: 'Go to Borrow', onPress: () => router.push(`/book-catalog/details?id=${freshBook.id}`) },
+              { text: 'Close', style: 'cancel' }
+            ]
+          );
+          return;
+        }
+        
+        console.log('✅ Book validation passed: Proceeding with reservation');
+
         // Check for self-reservation (user cannot reserve their own borrowed copy)
-        if (selectedCopy && selectedCopy.borrowedByUserId && selectedCopy.borrowedByUserId === userId) {
+        const possibleSelectedCopyIds = [
+          String(selectedCopy.id || ''),
+          String(selectedCopy.copyId || ''),
+          String(selectedCopy.copy_id || ''),
+          String(selectedCopy.qrCode || ''),
+          String(selectedCopy.qr_code || ''),
+          String(selectedCopy.copyNumber || ''),
+          String(selectedCopy.copy_number || '')
+        ].filter(id => id && id !== 'undefined' && id !== 'null');
+        
+        const isMyBorrowedCopy = possibleSelectedCopyIds.some(id => userBorrowedCopyIds.has(id));
+        if (isMyBorrowedCopy) {
           Alert.alert(
             'Cannot Reserve Your Own Copy',
-            `You are currently borrowing Copy #${selectedCopy.copyNumber} of "${book.title}".\n\nYou cannot reserve a copy that you are already borrowing. Please return the book first if you need to borrow it again.`,
+            `You are currently borrowing Copy #${selectedCopy.copyNumber || selectedCopy.copy_number || selectedCopy.id} of "${book.title}".\n\nYou cannot reserve a copy that you are already borrowing. Please return the book first if you need to borrow it again.`,
             [{ text: 'OK' }]
           );
           return;
@@ -310,8 +583,8 @@ const BookReservationScreen = () => {
       expectedReturnDate.setDate(expectedReturnDate.getDate() + 30);
 
       // Call the new reservation API
-      console.log('📝 Creating reservation for book:', book.id);
-      const response = await ApiService.createReservation(book.id, {
+      console.log('📝 Creating reservation for book:', freshBook.id);
+      const response = await ApiService.createReservation(freshBook.id, {
         expectedReturnDate: expectedReturnDate.toISOString(),
         initialCondition: 'GOOD',
         conditionNotes: selectedCopy ? `Reserved Copy #${selectedCopy.copyNumber} via mobile app` : 'Reserved via mobile app'
@@ -352,6 +625,34 @@ const BookReservationScreen = () => {
       }
     } catch (err) {
       const msg = String(err?.message || '').toUpperCase();
+      console.error('❌ Reservation error:', err);
+      
+      if (msg.includes('BOOK_AVAILABLE')) {
+        setConditionModalVisible(false);
+        Alert.alert(
+          'Book Available for Direct Borrowing',
+          'This book has available copies. Please borrow it directly instead of reserving.',
+          [
+            { text: 'Go to Borrow', onPress: () => router.push(`/book-catalog/details?id=${book.id}`) },
+            { text: 'Close', style: 'cancel' }
+          ]
+        );
+        return;
+      }
+      
+      if (msg.includes('NO_BORROWED_COPIES')) {
+        setConditionModalVisible(false);
+        Alert.alert(
+          'No Reservations Available',
+          'All copies of this book are currently available. You can borrow it directly instead of reserving.',
+          [
+            { text: 'Go to Borrow', onPress: () => router.push(`/book-catalog/details?id=${book.id}`) },
+            { text: 'Close', style: 'cancel' }
+          ]
+        );
+        return;
+      }
+      
       if (msg.includes('DUPLICATE_RESERVATION') || msg.includes('ALREADY_RESERVED')) {
         // Save selected copy locally so UI can show pending
         try {
@@ -373,62 +674,143 @@ const BookReservationScreen = () => {
         );
         return;
       }
+      
+      if (msg.includes('OVERDUE_BOOKS')) {
+        setConditionModalVisible(false);
+        setErrorDialog({ visible: true, type: 'overdue_books' });
+        return;
+      }
+      
       handleErrorForUI(err, Alert.alert, 'Reservation Failed');
     } finally {
       setReserving(false);
     }
   };
 
-  const renderBookItem = ({ item }) => (
-    <View style={styles.bookItem}>
-      <View style={styles.bookInfo}>
-        <Text style={styles.bookTitle}>{item.title || item.bookTitle}</Text>
-        <Text style={styles.bookAuthor}>by {item.author || item.bookAuthor || 'Not specified'}</Text>
-      <View style={styles.bookDetails}>
-          <View style={styles.detailRow}>
-            <MaterialCommunityIcons name="book" size={16} color="#6b7280" />
-            <Text style={styles.detailText}>Subject: {item.subject || item.category || 'Not specified'}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <MaterialCommunityIcons name="map-marker" size={16} color="#6b7280" />
-            <Text style={styles.detailText}>DDC: {item.ddc || item.ddcNumber || 'Not specified'}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <MaterialCommunityIcons name="barcode" size={16} color="#6b7280" />
-            <Text style={styles.detailText}>ISBN: {item.isbn || item.ISBN || 'Not specified'}</Text>
+  const renderBookItem = ({ item }) => {
+    const isCurrentlyBorrowed = myBorrowedBookIds.has(String(item.id || item.bookId || item.book_id));
+    const availableCopies = item.availableCopies ?? item.available_copies ?? 0;
+    const totalCopies = item.totalCopies ?? item.total_copies ?? 0;
+    const borrowedCopies = totalCopies - availableCopies;
+    // Backend logic: reservation allowed if availableCopies < totalCopies (some copies are borrowed)
+    const canReserve = availableCopies < totalCopies;
+    
+    console.log('🔍 Book reservation check:', {
+      bookId: item.id,
+      title: item.title,
+      availableCopies,
+      totalCopies,
+      borrowedCopies,
+      canReserve,
+      isCurrentlyBorrowed
+    });
+    
+    return (
+      <View style={styles.bookItem}>
+        <View style={styles.bookInfo}>
+          <Text style={styles.bookTitle}>{item.title || item.bookTitle}</Text>
+          <Text style={styles.bookAuthor}>by {item.author || item.bookAuthor || 'Not specified'}</Text>
+        <View style={styles.bookDetails}>
+            <View style={styles.detailRow}>
+              <MaterialCommunityIcons name="book" size={16} color="#6b7280" />
+              <Text style={styles.detailText}>Subject: {item.subject || item.category || 'Not specified'}</Text>
+            </View>
+            <View style={styles.detailRow}>
+              <MaterialCommunityIcons name="map-marker" size={16} color="#6b7280" />
+              <Text style={styles.detailText}>DDC: {item.ddc || item.ddcNumber || 'Not specified'}</Text>
+            </View>
+            <View style={styles.detailRow}>
+              <MaterialCommunityIcons name="barcode" size={16} color="#6b7280" />
+              <Text style={styles.detailText}>ISBN: {item.isbn || item.ISBN || 'Not specified'}</Text>
+            </View>
           </View>
         </View>
-      </View>
-      
-      <View style={styles.availabilityInfo}>
-        <View style={styles.availabilityBadge}>
-          <MaterialCommunityIcons name="book" size={16} color="#f59e0b" />
-          <Text style={styles.availabilityText}>
-            {(item.availableCopies ?? item.available_copies ?? 0)} of {(item.totalCopies ?? item.total_copies ?? 0)} copies available
-        </Text>
+        
+        {/* Currently Borrowed Status */}
+        {isCurrentlyBorrowed && (
+          <View style={styles.borrowedStatusBadge}>
+            <MaterialCommunityIcons name="book-check" size={16} color="#16a34a" />
+            <Text style={styles.borrowedStatusText}>You Currently Borrowed This</Text>
+          </View>
+        )}
+        
+        <View style={styles.availabilityInfo}>
+          <View style={styles.availabilityBadge}>
+            <MaterialCommunityIcons name="book" size={16} color="#f59e0b" />
+            <Text style={styles.availabilityText}>
+              {availableCopies} of {totalCopies} copies available
+          </Text>
+          </View>
+          <View style={styles.borrowedInfo}>
+            <MaterialCommunityIcons name="lock" size={16} color="#ef4444" />
+            <Text style={styles.borrowedText}>
+              {borrowedCopies} copies currently borrowed
+          </Text>
+          </View>
         </View>
-        <View style={styles.borrowedInfo}>
-          <MaterialCommunityIcons name="lock" size={16} color="#ef4444" />
-          <Text style={styles.borrowedText}>
-            {(item.totalCopies ?? item.total_copies ?? 0) - (item.availableCopies ?? item.available_copies ?? 0)} copies currently borrowed
-        </Text>
-        </View>
-      </View>
 
-      <TouchableOpacity 
-        style={styles.reserveButton}
-        onPress={() => router.push({ pathname: '/reservation/details', params: { id: item.id } })}
-      >
-        <View style={styles.buttonContent}>
-          <MaterialCommunityIcons name="eye" size={18} color="white" />
-          <Text style={styles.reserveButtonText}>View Details</Text>
-        </View>
-      </TouchableOpacity>
-    </View>
-  );
+        <TouchableOpacity 
+          style={[styles.reserveButton, (!canReserve || isCurrentlyBorrowed) && styles.disabledButton]}
+          onPress={() => {
+            if (isCurrentlyBorrowed) {
+              Alert.alert(
+                'Cannot Reserve Your Own Copy',
+                'You are currently borrowing this book. You cannot reserve a copy that you are already borrowing.',
+                [{ text: 'OK' }]
+              );
+            } else if (!canReserve) {
+              Alert.alert(
+                'All Copies Available',
+                'All copies of this book are currently available. You can borrow it directly instead of reserving.',
+                [
+                  { text: 'Go to Borrow', onPress: () => router.push({ pathname: '/book-catalog/details', params: { id: item.id } }) },
+                  { text: 'Close', style: 'cancel' }
+                ]
+              );
+            } else {
+              router.push({ pathname: '/reservation/details', params: { id: item.id } });
+            }
+          }}
+        >
+          <View style={styles.buttonContent}>
+            <MaterialCommunityIcons 
+              name={isCurrentlyBorrowed ? "book-check" : (!canReserve ? "book-open" : "eye")} 
+              size={18} 
+              color="white" 
+            />
+            <Text style={styles.reserveButtonText}>
+              {isCurrentlyBorrowed ? 'Currently Borrowed' : (!canReserve ? 'All Copies Available' : 'View Details')}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   const renderCopyItem = ({ item }) => {
     console.log('🔍 Copy item data for rendering:', item);
+    console.log('🔍 Available copy fields:', Object.keys(item));
+    const copyId = String(item.id || item.copyId || item.copy_id || '');
+    console.log('🔍 Extracted copyId:', copyId);
+    console.log('🔍 User borrowed copy IDs:', Array.from(userBorrowedCopyIds));
+    
+    // Try multiple possible copy ID formats for comparison
+    const possibleCopyIds = [
+      String(item.id || ''),
+      String(item.copyId || ''),
+      String(item.copy_id || ''),
+      String(item.qrCode || ''),
+      String(item.qr_code || ''),
+      String(item.copyNumber || ''),
+      String(item.copy_number || '')
+    ].filter(id => id && id !== 'undefined' && id !== 'null');
+    
+    console.log('🔍 All possible copy IDs for this item:', possibleCopyIds);
+    
+    const isMyBorrowedCopy = possibleCopyIds.some(id => userBorrowedCopyIds.has(id));
+    console.log('🔍 Is my borrowed copy?', isMyBorrowedCopy, 'using any of:', possibleCopyIds);
+    const isLoading = loadingCopyId === copyId;
+    
     return (
     <View style={styles.bookItem}>
       <View style={styles.bookInfo}>
@@ -464,12 +846,19 @@ const BookReservationScreen = () => {
       </View>
 
       <TouchableOpacity 
-        style={styles.reserveButton}
+        style={[styles.reserveButton, isMyBorrowedCopy && styles.disabledButton]}
         onPress={() => handleCopySelection(item)}
+        disabled={isMyBorrowedCopy || isLoading}
       >
         <View style={styles.buttonContent}>
+          {isLoading ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
           <MaterialCommunityIcons name="bookmark" size={18} color="white" />
-          <Text style={styles.reserveButtonText}>Reserve This Copy</Text>
+          )}
+          <Text style={styles.reserveButtonText}>
+            {isLoading ? 'Loading...' : (isMyBorrowedCopy ? '✅ Currently Borrowed' : 'Reserve This Copy')}
+          </Text>
         </View>
       </TouchableOpacity>
     </View>
@@ -713,7 +1102,7 @@ const BookReservationScreen = () => {
       {/* Content based on active tab */}
       {activeTab === 'BOOKS' ? (
       <FlatList
-          data={book?.copies || []}
+          data={book?.borrowedCopies || book?.copies || []}
         renderItem={renderBookItem}
           keyExtractor={(item, index) => `book_${item.id || index}`}
         contentContainerStyle={styles.listContainer}
@@ -768,6 +1157,17 @@ const BookReservationScreen = () => {
         submitText="Reserve Book"
         book={book}
         loading={reserving}
+      />
+
+      {/* Overdue Error Dialog */}
+      <BorrowErrorDialog
+        visible={errorDialog.visible}
+        onClose={() => setErrorDialog({ visible: false, type: null })}
+        errorType={errorDialog.type}
+        bookTitle={book?.title}
+        onViewMyBooks={() => router.push('/borrowing/my-books')}
+        onReserveInstead={() => setErrorDialog({ visible: false, type: null })}
+        onViewFines={() => router.push('/overdue-fines')}
       />
 
     </View>
@@ -960,6 +1360,10 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
+  disabledButton: {
+    backgroundColor: '#9ca3af',
+    opacity: 0.6,
+  },
   buttonContent: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1091,6 +1495,28 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     textTransform: 'uppercase',
+  },
+  // Currently Borrowed Status Styles
+  borrowedStatusBadge: {
+    backgroundColor: '#d1fae5',
+    borderColor: '#16a34a',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  borrowedStatusText: {
+    color: '#16a34a',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  disabledButton: {
+    backgroundColor: '#9ca3af',
+    opacity: 0.7,
   },
 });
 

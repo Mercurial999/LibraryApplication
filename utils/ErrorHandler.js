@@ -10,9 +10,16 @@ export const ErrorTypes = {
   INVALID_COPY: 'INVALID_COPY',
   ALREADY_BORROWED: 'ALREADY_BORROWED',
   ALREADY_RESERVED: 'ALREADY_RESERVED',
+  DUPLICATE_REQUEST: 'DUPLICATE_REQUEST',
   DUPLICATE_RESERVATION: 'DUPLICATE_RESERVATION',
   ACCOUNT_SUSPENDED: 'ACCOUNT_SUSPENDED',
   OVERDUE_BOOKS: 'OVERDUE_BOOKS',
+  BOOK_REPORTED_LOST: 'BOOK_REPORTED_LOST',
+  BOOK_REPORTED_DAMAGED: 'BOOK_REPORTED_DAMAGED',
+  BOOK_LOST: 'BOOK_LOST',
+  BOOK_DAMAGED: 'BOOK_DAMAGED',
+  COPY_LOST: 'COPY_LOST',
+  COPY_DAMAGED: 'COPY_DAMAGED',
   NETWORK_ERROR: 'NETWORK_ERROR',
   AUTHENTICATION_ERROR: 'AUTHENTICATION_ERROR'
 };
@@ -24,9 +31,16 @@ export const UserFriendlyMessages = {
   [ErrorTypes.INVALID_COPY]: 'The selected copy is no longer available.',
   [ErrorTypes.ALREADY_BORROWED]: 'You have already borrowed this book.',
   [ErrorTypes.ALREADY_RESERVED]: 'You have already reserved this book.',
+  [ErrorTypes.DUPLICATE_REQUEST]: 'You already have a pending borrow request for this book.',
   [ErrorTypes.DUPLICATE_RESERVATION]: 'You already have an active reservation for this book. Check My Reservations.',
   [ErrorTypes.ACCOUNT_SUSPENDED]: 'Your account is currently suspended. Please contact the library.',
   [ErrorTypes.OVERDUE_BOOKS]: 'You have overdue books. Please return them before borrowing new ones.',
+  [ErrorTypes.BOOK_REPORTED_LOST]: 'This title is reported lost under your account. Please resolve the report with the library desk before borrowing again.',
+  [ErrorTypes.BOOK_REPORTED_DAMAGED]: 'This title has a pending damage report on your account. Please resolve it before borrowing again.',
+  [ErrorTypes.BOOK_LOST]: 'This book is marked as lost and cannot be borrowed.',
+  [ErrorTypes.BOOK_DAMAGED]: 'This book is marked as damaged and cannot be borrowed.',
+  [ErrorTypes.COPY_LOST]: 'The selected copy is marked as lost. Please select another copy.',
+  [ErrorTypes.COPY_DAMAGED]: 'The selected copy is marked as damaged. Please select another copy.',
   [ErrorTypes.NETWORK_ERROR]: 'Network connection issue. Please check your internet connection and try again.',
   [ErrorTypes.AUTHENTICATION_ERROR]: 'Authentication failed. Please log in again.'
 };
@@ -49,6 +63,7 @@ export const shouldShowErrorToUser = (error) => {
     'INVALID_COPY',
     'ALREADY_BORROWED',
     'ALREADY_RESERVED',
+    'DUPLICATE_REQUEST',
     'DUPLICATE_RESERVATION',
     'ACCOUNT_SUSPENDED',
     'OVERDUE_BOOKS',
@@ -87,6 +102,14 @@ export const getUserFriendlyErrorMessage = (error) => {
     return UserFriendlyMessages[ErrorTypes.INVALID_COPY];
   } else if (errorMessage.includes('ALREADY_BORROWED')) {
     return UserFriendlyMessages[ErrorTypes.ALREADY_BORROWED];
+  } else if (errorMessage.includes('BOOK_REPORTED_LOST') || errorMessage.includes('REPORTED_LOST')) {
+    return UserFriendlyMessages[ErrorTypes.BOOK_REPORTED_LOST];
+  } else if (errorMessage.includes('BOOK_REPORTED_DAMAGED') || errorMessage.includes('REPORTED_DAMAGED')) {
+    return UserFriendlyMessages[ErrorTypes.BOOK_REPORTED_DAMAGED];
+  } else if (errorMessage.includes('COPY_LOST') || errorMessage.includes('BOOK_COPY_LOST') || errorMessage.includes('BOOK_LOST')) {
+    return UserFriendlyMessages[ErrorTypes.COPY_LOST];
+  } else if (errorMessage.includes('COPY_DAMAGED') || errorMessage.includes('BOOK_COPY_DAMAGED') || errorMessage.includes('BOOK_DAMAGED')) {
+    return UserFriendlyMessages[ErrorTypes.COPY_DAMAGED];
   } else if (errorMessage.includes('ALREADY_RESERVED')) {
     return UserFriendlyMessages[ErrorTypes.ALREADY_RESERVED];
   } else if (errorMessage.includes('DUPLICATE_RESERVATION')) {
@@ -124,7 +147,12 @@ export const handleBackendError = (apiResponse) => {
   
   // Check if it's a user-friendly error based on backend error type
   if (error.type === 'USER_ERROR' || error.type === 'SYSTEM_ERROR') {
-    return new Error(error.message);
+    // Prefer error.code in message so upstream handlers can detect by code
+    const err = new Error(error.code ? String(error.code).toUpperCase() : (error.message || 'ERROR'));
+    // Preserve original user message for UI mapping if needed
+    err.userMessage = error.message;
+    err.errorCode = error.code || undefined;
+    return err;
   }
   
   // Check error code for user-friendly errors
@@ -144,15 +172,31 @@ export const handleBackendError = (apiResponse) => {
  * @param {string} defaultTitle - Default title for the alert
  */
 export const handleErrorForUI = (error, showAlert, defaultTitle = 'Error') => {
-  console.error('Error occurred:', error);
+  const isUserFacing = shouldShowErrorToUser(error);
+  // Avoid console.error for user-facing errors to reduce Metro symbolication noise
+  try {
+    const msg = typeof error === 'string' ? error : (error?.message || String(error));
+    if (!isUserFacing) {
+      console.error('Error occurred:', msg);
+    }
+  } catch (_) {
+    if (!isUserFacing) {
+      console.error('Error occurred');
+    }
+  }
   
-  if (shouldShowErrorToUser(error)) {
+  if (isUserFacing) {
     // Show user-friendly error
     const message = getUserFriendlyErrorMessage(error);
     showAlert(defaultTitle, message);
   } else {
-    // For code errors, just log them and show generic message
-    console.error('Code error (not showing to user):', error);
+    // For code errors, log minimal and show generic message
+    try {
+      const msg = typeof error === 'string' ? error : (error?.message || String(error));
+      console.error('Code error (not showing to user):', msg);
+    } catch (_) {
+      console.error('Code error (not showing to user)');
+    }
     showAlert('Error', 'Something went wrong. Please try again later.');
   }
 };

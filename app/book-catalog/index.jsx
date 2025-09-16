@@ -1,6 +1,6 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -19,6 +19,7 @@ import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import { COURSE_PROGRAMS, SHELF_LOCATIONS } from '../../constants/BookConstants';
 import ApiService from '../../services/ApiService';
+import StatusSync from '../../utils/StatusSync';
 
 const { width } = Dimensions.get('window');
 
@@ -46,6 +47,9 @@ const BookCatalogScreen = () => {
   
   // Pending copy IDs tracking using Set
   const [pendingCopyIds, setPendingCopyIds] = useState(new Set());
+  const [myBorrowedBookIds, setMyBorrowedBookIds] = useState(new Set());
+  // Track pending requests by book ID for proper catalog display
+  const [pendingBookIds, setPendingBookIds] = useState(new Set());
   
   const router = useRouter();
 
@@ -70,14 +74,60 @@ const BookCatalogScreen = () => {
       if (response.success && response.data && response.data.requests) {
           console.log('📋 Server pending requests:', response.data.requests);
           
-          if (response.data.requests.length > 0) {
-            console.log('⚠️ Found pending requests but copyId is missing from server response');
-            console.log('⚠️ This indicates a backend API issue - copyId should be included in /api/borrow-requests');
-            console.log('⚠️ Frontend will rely on client state until backend is fixed');
+          // Get currently borrowed books to exclude approved requests
+          const borrowedResponse = await ApiService.getUserBooks(undefined, 'borrowed', false);
+          let borrowedCopyIds = new Set();
+          
+          if (borrowedResponse) {
+            const borrowedBooks = Array.isArray(borrowedResponse) ? borrowedResponse : 
+                                 Array.isArray(borrowedResponse?.data) ? borrowedResponse.data :
+                                 Array.isArray(borrowedResponse?.data?.books) ? borrowedResponse.data.books :
+                                 Array.isArray(borrowedResponse?.books) ? borrowedResponse.books : [];
             
-            // For now, we can't determine which specific copies are pending
-            // This is a temporary workaround until the backend includes copyId
-            console.log('⚠️ TEMPORARY: Cannot determine specific pending copies due to missing copyId');
+            borrowedBooks.forEach(book => {
+              const copyId = book.copyId || book.copy_id || book.copy?.id;
+              if (copyId) {
+                borrowedCopyIds.add(String(copyId));
+              }
+            });
+          }
+          
+          console.log('📋 Currently borrowed copy IDs (catalog):', Array.from(borrowedCopyIds));
+          
+          // Only include copy IDs that are NOT currently borrowed (exclude approved requests)
+          const serverCopyIds = new Set(
+            response.data.requests
+              .filter(r => String(r.status || '').toUpperCase() === 'PENDING')
+              .map(r => r.copyId)
+              .filter(Boolean)
+              .filter(copyId => !borrowedCopyIds.has(String(copyId)))
+          );
+          
+          // Also track pending book IDs for catalog display
+          const serverBookIds = new Set(
+            response.data.requests
+              .filter(r => String(r.status || '').toUpperCase() === 'PENDING')
+              .map(r => r.bookId)
+              .filter(Boolean)
+              .filter(bookId => !myBorrowedBookIds.has(String(bookId)))
+          );
+          
+          console.log('📋 Server pending copy IDs (excluding borrowed):', Array.from(serverCopyIds));
+          console.log('📋 Server pending book IDs (excluding borrowed):', Array.from(serverBookIds));
+          
+          if (serverCopyIds.size > 0) {
+            setPendingCopyIds(prev => {
+              const merged = new Set([...Array.from(prev), ...Array.from(serverCopyIds)]);
+              savePendingCopyIds(merged);
+              return merged;
+            });
+          }
+          
+          if (serverBookIds.size > 0) {
+            setPendingBookIds(prev => {
+              const merged = new Set([...Array.from(prev), ...Array.from(serverBookIds)]);
+              return merged;
+            });
           }
       }
     } catch (error) {
@@ -100,6 +150,24 @@ const BookCatalogScreen = () => {
     }
   };
 
+  // Clear specific pending copy IDs from storage (when approved)
+  const clearPendingCopyIds = async (copyIdsToRemove) => {
+    try {
+      const storageKey = 'pending_copy_ids_global';
+      const stored = await AsyncStorage.getItem(storageKey);
+      if (stored) {
+        const currentIds = new Set(JSON.parse(stored));
+        copyIdsToRemove.forEach(copyId => {
+          currentIds.delete(String(copyId));
+        });
+        await AsyncStorage.setItem(storageKey, JSON.stringify(Array.from(currentIds)));
+        console.log('📋 Cleared global pending copy IDs:', copyIdsToRemove);
+      }
+    } catch (error) {
+      console.error('❌ Error clearing pending copy IDs:', error);
+    }
+  };
+
   // Load books from backend
   const loadBooks = async (isRefresh = false) => {
     try {
@@ -108,17 +176,18 @@ const BookCatalogScreen = () => {
       
       console.log('Loading books with search:', search, 'filterBy:', filterBy);
       
-      // Use the new available books API for the book catalog
-      const response = await ApiService.getAvailableBooks({ 
-        limit: 1000, // Get all available books
+      // Use the books API to get ALL books (available and unavailable) for the catalog
+      const response = await ApiService.getBooks({ 
+        limit: 1000, // Get all books regardless of availability
         search: search || undefined,
         filterBy: filterBy || undefined,
         forceRefresh: isRefresh
       });
       
-      if (response.success && response.data && response.data.books) {
-        const allBooks = response.data.books;
-        console.log(`📖 Loaded ${allBooks.length} books into catalog`);
+      if (response.success && response.data) {
+        // Handle both array response and object with books property
+        const allBooks = Array.isArray(response.data) ? response.data : response.data.books || [];
+        console.log(`📖 Loaded ${allBooks.length} books into catalog (including unavailable books)`);
         
         // Debug: Log first book structure to understand data format
         if (allBooks.length > 0) {
@@ -175,6 +244,125 @@ const BookCatalogScreen = () => {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Load user's currently borrowed books once and on refresh
+  const loadMyBorrowedBooks = async () => {
+    try {
+      console.log('🔄 loadMyBorrowedBooks called - starting fresh fetch');
+      
+      // Get current user ID first
+      const userId = await ApiService.getCurrentUserId();
+      if (!userId) {
+        console.log('⚠️ No user ID available for borrowed books check');
+        setMyBorrowedBookIds(new Set());
+        return;
+      }
+      
+      console.log('📋 Current user ID:', userId);
+
+      // Try multiple API approaches to get borrowed books
+      let res = null;
+      
+      // Approach 1: Try the mobile API endpoint
+      try {
+        console.log('📋 Trying mobile API endpoint...');
+        const response = await fetch(`${ApiService.API_BASE}/api/mobile/users/${userId}/books`, {
+          method: 'GET',
+          headers: await ApiService.getAuthHeaders(),
+        });
+        
+        if (response.ok) {
+          res = await response.json();
+          console.log('📋 Mobile API response:', res);
+        } else {
+          console.log('📋 Mobile API failed with status:', response.status);
+        }
+      } catch (e) {
+        console.log('📋 Mobile API error:', e.message);
+      }
+      
+      // Approach 2: Try ApiService.getUserBooks if mobile API failed
+      if (!res || !res.success) {
+        try {
+          console.log('📋 Trying ApiService.getUserBooks...');
+          res = await ApiService.getUserBooks(userId, 'borrowed', false);
+          console.log('📋 ApiService response:', res);
+        } catch (e) {
+          console.log('📋 ApiService error:', e.message);
+        }
+      }
+      
+      // Approach 3: Try alternative ApiService signature
+      if (!res || !res.success) {
+        try {
+          console.log('📋 Trying alternative ApiService signature...');
+          res = await ApiService.getUserBooks(userId, { status: 'borrowed', includeHistory: false });
+          console.log('📋 Alternative ApiService response:', res);
+        } catch (e) {
+          console.log('📋 Alternative ApiService error:', e.message);
+        }
+      }
+
+      console.log('📋 Final API response:', res);
+
+      // Extract borrowed books from response
+      let rows = [];
+      if (res && res.success) {
+        if (Array.isArray(res.data)) {
+        rows = res.data;
+        } else if (Array.isArray(res.data?.books)) {
+        rows = res.data.books;
+        } else if (Array.isArray(res.data?.borrowedBooks)) {
+          rows = res.data.borrowedBooks;
+        } else if (Array.isArray(res.data?.items)) {
+          rows = res.data.items;
+        }
+      } else if (Array.isArray(res)) {
+        rows = res;
+      } else if (Array.isArray(res?.books)) {
+        rows = res.books;
+      }
+
+      console.log('📋 Extracted rows:', rows);
+
+      // Extract book IDs from borrowed books
+      const ids = new Set();
+      (rows || []).forEach(book => {
+        // Try multiple possible ID fields
+        const possibleIds = [
+          book.id,
+          book.bookId,
+          book.book_id,
+          book.book?.id,
+          book.book?.bookId,
+          book.book?.book_id
+        ].filter(Boolean);
+        
+        possibleIds.forEach(id => {
+          if (id) {
+            ids.add(String(id));
+            console.log('📋 Found borrowed book ID:', String(id), 'from book:', book.title || book.book?.title || 'Unknown');
+          }
+        });
+      });
+
+      console.log('📋 Final borrowed book IDs (catalog):', Array.from(ids));
+
+      if (ids.size > 0) {
+        setMyBorrowedBookIds(ids);
+        try { 
+          await AsyncStorage.setItem('my_borrowed_ids', JSON.stringify(Array.from(ids))); 
+          console.log('📋 Saved borrowed book IDs to cache:', Array.from(ids));
+        } catch {}
+      } else {
+        setMyBorrowedBookIds(new Set());
+        console.log('📋 No borrowed books found');
+      }
+    } catch (e) {
+      console.log('⚠️ Could not load my borrowed books for catalog:', e?.message);
+      setMyBorrowedBookIds(new Set());
     }
   };
 
@@ -264,12 +452,50 @@ const BookCatalogScreen = () => {
   // Refresh books
   const onRefresh = () => {
     setRefreshing(true);
-    loadBooks(true);
+    console.log('🔄 Manual refresh triggered');
+    Promise.all([loadBooks(true), loadMyBorrowedBooks()]).finally(() => setRefreshing(false));
+  };
+  
+  // Force refresh borrowed books
+  const forceRefreshBorrowedBooks = async () => {
+    console.log('🔄 Force refreshing borrowed books...');
+    await loadMyBorrowedBooks();
   };
 
   // Handle book click - navigate to book details to select copy
-  const handleBookClick = (bookId) => {
+  const handleBookClick = async (bookId) => {
     console.log('Book clicked:', bookId);
+    
+    // Quick check if this book is already borrowed before navigating
+    const bookIdStr = String(bookId);
+    if (myBorrowedBookIds.has(bookIdStr)) {
+      Alert.alert(
+        'Already Borrowed',
+        'You currently have this book borrowed. You cannot request to borrow or reserve it again.',
+        [
+          { text: 'View My Books', onPress: () => router.push('/borrowing/my-books') },
+          { text: 'OK' }
+        ]
+      );
+      return;
+    }
+    
+    // Refresh borrowed books data to ensure we have latest info
+    await loadMyBorrowedBooks();
+    
+    // Check again after refresh
+    if (myBorrowedBookIds.has(bookIdStr)) {
+      Alert.alert(
+        'Already Borrowed',
+        'You currently have this book borrowed. You cannot request to borrow or reserve it again.',
+        [
+          { text: 'View My Books', onPress: () => router.push('/borrowing/my-books') },
+          { text: 'OK' }
+        ]
+      );
+      return;
+    }
+    
     router.push({ 
       pathname: '/book-catalog/details', 
       params: { id: bookId } 
@@ -280,6 +506,7 @@ const BookCatalogScreen = () => {
   const handleBorrowRequestSuccess = (requestData) => {
     console.log('Borrow request submitted successfully:', requestData);
     console.log('📋 Request data copyId:', requestData.copyId);
+    console.log('📋 Request data bookId:', requestData.bookId);
     console.log('📋 Current global pending copy IDs before update:', Array.from(pendingCopyIds));
     
     // Add the copy ID to pending set
@@ -295,6 +522,19 @@ const BookCatalogScreen = () => {
     } else {
       console.log('❌ No copyId in request data for global tracking');
       console.log('❌ Request data:', requestData);
+    }
+    
+    // Add the book ID to pending book set
+    if (requestData.bookId) {
+      console.log('📋 Adding book ID to global pending set:', requestData.bookId);
+      setPendingBookIds(prev => {
+        const newSet = new Set(prev);
+        newSet.add(requestData.bookId);
+        console.log('📋 Updated global pending book IDs:', Array.from(newSet));
+        return newSet;
+      });
+    } else {
+      console.log('❌ No bookId in request data for global tracking');
     }
     
     // Optionally refresh the book list or show success message
@@ -324,7 +564,35 @@ const BookCatalogScreen = () => {
         return;
       }
 
+      // Check if user already has this book borrowed
+      const bookIdStr = String(bookId);
+      const alreadyBorrowed = myBorrowedBookIds.has(bookIdStr);
+      
+      // Refresh borrowed books data to ensure we have latest info
+      await loadMyBorrowedBooks();
+      
+      // Check again after refresh
+      const stillBorrowed = myBorrowedBookIds.has(bookIdStr);
+      
+      if (alreadyBorrowed || stillBorrowed) {
+        Alert.alert(
+          'Already Borrowed',
+          'You already have this book borrowed. You cannot reserve a book you currently have on loan.',
+          [
+            { text: 'View My Books', onPress: () => router.push('/borrowing/my-books') },
+            { text: 'OK' }
+          ]
+        );
+        return;
+      }
+
       // Check if all copies are borrowed (available for reservation)
+      // Additional validation: ensure we have valid data
+      if (!book.availableCopies && book.availableCopies !== 0) {
+        Alert.alert('Error', 'Unable to determine book availability. Please try again.');
+        return;
+      }
+      
       if (book.availableCopies === 0 && book.totalCopies > 0) {
         const expectedReturnDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
@@ -349,7 +617,30 @@ const BookCatalogScreen = () => {
           );
         } else {
           const error = await response.json();
-          Alert.alert('Reservation Failed', error.message || 'Failed to reserve book. Please try again.');
+          console.log('Reservation error response:', error);
+          
+          // Handle specific error cases
+          if (error.error && error.error.code === 'BOOK_AVAILABLE') {
+            Alert.alert(
+              'Book Available', 
+              'This book has available copies. Please borrow it directly instead of reserving.',
+              [
+                { text: 'Go to Borrow', onPress: () => handleBookClick(bookId) },
+                { text: 'Close', style: 'cancel' }
+              ]
+            );
+          } else if (error.error && error.error.code === 'NO_BORROWED_COPIES') {
+            Alert.alert(
+              'No Reservations Needed', 
+              'All copies of this book are currently available. You can borrow it directly.',
+              [
+                { text: 'Go to Borrow', onPress: () => handleBookClick(bookId) },
+                { text: 'Close', style: 'cancel' }
+              ]
+            );
+          } else {
+            Alert.alert('Reservation Failed', error.error?.message || error.message || 'Failed to reserve book. Please try again.');
+          }
         }
       } else {
         Alert.alert(
@@ -371,12 +662,70 @@ const BookCatalogScreen = () => {
         ApiService.clearCatalogCache();
       await Promise.all([
         loadBooks(true),
-        loadPendingCopyIds()
+        loadPendingCopyIds(),
+        loadMyBorrowedBooks()
       ]);
     };
     
     initializeScreen();
+    
+    // Set up real-time status synchronization
+    const statusSyncCallback = (syncData) => {
+      console.log('📡 BookCatalog: Received real-time status update');
+      // Refresh borrowed books data to update availability status
+      loadMyBorrowedBooks();
+      // Refresh pending copy IDs to update request status
+      loadPendingCopyIds();
+      
+      // Handle clearing pending copy IDs when requests are approved
+      if (syncData.clearPending && Array.isArray(syncData.clearPending)) {
+        console.log('📡 BookCatalog: Clearing pending copy IDs for approved requests:', syncData.clearPending);
+        setPendingCopyIds(prev => {
+          const newSet = new Set(prev);
+          syncData.clearPending.forEach(copyId => {
+            newSet.delete(String(copyId));
+          });
+          return newSet;
+        });
+        // Also clear from storage
+        clearPendingCopyIds(syncData.clearPending);
+      }
+      
+      // Handle clearing pending book IDs when requests are approved
+      if (syncData.clearPendingBooks && Array.isArray(syncData.clearPendingBooks)) {
+        console.log('📡 BookCatalog: Clearing pending book IDs for approved requests:', syncData.clearPendingBooks);
+        setPendingBookIds(prev => {
+          const newSet = new Set(prev);
+          syncData.clearPendingBooks.forEach(bookId => {
+            newSet.delete(String(bookId));
+          });
+          return newSet;
+        });
+      }
+    };
+    
+    StatusSync.addListener(statusSyncCallback);
+    StatusSync.startSync();
+    
+    return () => {
+      StatusSync.removeListener(statusSyncCallback);
+    };
   }, []);
+
+  // Refresh borrowed IDs when returning to catalog
+  useFocusEffect(
+    React.useCallback(() => {
+      (async () => {
+        try {
+          // Always apply cached IDs immediately on focus before fetching server
+          const cached = await AsyncStorage.getItem('my_borrowed_ids');
+          if (cached) setMyBorrowedBookIds(new Set(JSON.parse(cached).map(String)));
+        } catch {}
+        await loadMyBorrowedBooks();
+      })();
+      return () => {};
+    }, [])
+  );
 
   // Handle filter change
   const handleFilterChange = (newFilter) => {
@@ -453,7 +802,8 @@ const BookCatalogScreen = () => {
   }, [search, filterBy, books]);
 
   // Render book item
-  const renderBookItem = ({ item }) => (
+  const renderBookItem = ({ item }) => {
+    return (
     <View style={styles.bookCard}>
       <View style={styles.bookHeader}>
         <View style={styles.bookTitleContainer}>
@@ -463,17 +813,25 @@ const BookCatalogScreen = () => {
           <Text style={styles.bookAuthor}>by {item.author}</Text>
         </View>
         
-        {/* Availability Badge */}
+        {/* Enhanced Availability Badge - Hide if currently borrowed */}
+        {!myBorrowedBookIds.has(String(item.id || item.bookId || item.book_id)) && (
         <View style={[styles.availabilityBadge, item.availableCopies > 0 ? styles.availableBadge : styles.unavailableBadge]}>
           <MaterialCommunityIcons 
-            name={item.availableCopies > 0 ? 'check-circle' : 'close-circle'} 
+            name={item.availableCopies > 0 ? 'check-circle' : 'bookmark-outline'} 
             size={12} 
-            color={item.availableCopies > 0 ? '#10b981' : '#ef4444'} 
+            color={item.availableCopies > 0 ? '#10b981' : '#f59e0b'} 
           />
-          <Text style={[styles.availabilityBadgeText, { color: item.availableCopies > 0 ? '#10b981' : '#ef4444' }]}>
-            {item.availableCopies > 0 ? 'Available' : 'Unavailable'}
+          <Text style={[styles.availabilityBadgeText, { color: item.availableCopies > 0 ? '#10b981' : '#f59e0b' }]}>
+            {item.availableCopies > 0 ? 'Available' : 'Can Reserve'}
           </Text>
         </View>
+        )}
+        {myBorrowedBookIds.has(String(item.id || item.bookId || item.book_id)) && (
+          <View style={[styles.availabilityBadge, { backgroundColor: '#d1fae5', marginLeft: 8 }]}>
+            <MaterialCommunityIcons name="book-check" size={12} color="#16a34a" />
+            <Text style={[styles.availabilityBadgeText, { color: '#16a34a' }]}>You Borrowed This</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.bookMeta}>
@@ -523,27 +881,57 @@ const BookCatalogScreen = () => {
         </View>
       )}
 
-      {/* Availability Info */}
+      {/* Enhanced Availability Info */}
       <View style={styles.availabilityInfo}>
-        <Text style={styles.availabilityInfoText}>
-          {item.availableCopies > 0 
-            ? `${item.availableCopies} of ${item.totalCopies || 0} copies available`
-            : `All ${item.totalCopies || 0} copies unavailable`
-          }
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Text style={styles.availabilityInfoText}>
+            {myBorrowedBookIds.has(String(item.id || item.bookId || item.book_id))
+              ? `You have this book borrowed`
+              : item.availableCopies > 0 
+              ? `${item.availableCopies} of ${item.totalCopies || 0} copies available`
+              : `All ${item.totalCopies || 0} copies borrowed - can be reserved`
+            }
+          </Text>
+          {myBorrowedBookIds.has(String(item.id || item.bookId || item.book_id)) && (
+            <View style={styles.borrowedPill}><Text style={styles.borrowedPillText}>Currently Borrowed</Text></View>
+          )}
+        </View>
       </View>
 
       {/* Action Button */}
       <View style={styles.bookActions}>
         {(() => {
-          // Check for pending requests - only copy-specific
-          const hasPendingCopy = item.copies && item.copies.some(copy => 
-            pendingCopyIds.has(copy.id)
-          );
+          // More comprehensive check for already borrowed books (PRIORITY)
+          const bookId = String(item.id || item.bookId || item.book_id);
+          const alreadyBorrowed = myBorrowedBookIds.has(bookId);
           
+          // Check for pending requests - only if NOT already borrowed
+          // Check if this specific book has pending requests
+          const hasPendingCopy = !alreadyBorrowed && pendingBookIds.has(bookId);
+          
+          console.log('📋 Book action check for:', bookId, 'Already borrowed:', alreadyBorrowed, 'Has pending:', hasPendingCopy);
+
           const hasAnyPending = hasPendingCopy;
-          
-          return hasAnyPending ? (
+
+          // PRIORITY ORDER: Already Borrowed > Pending > Available
+          return alreadyBorrowed ? (
+            <TouchableOpacity
+              style={[styles.actionButton, styles.borrowedActionButton]}
+              onPress={() => {
+                Alert.alert(
+                  'Already Borrowed',
+                  'You currently have this book borrowed. You cannot request to borrow or reserve it again.',
+                  [
+                    { text: 'View My Books', onPress: () => router.push('/borrowing/my-books') },
+                    { text: 'OK' }
+                  ]
+                );
+              }}
+            >
+              <MaterialCommunityIcons name="book-check" size={16} color="#16a34a" />
+              <Text style={[styles.actionButtonText, styles.borrowedActionButtonText]}>Currently Borrowed</Text>
+            </TouchableOpacity>
+          ) : hasAnyPending ? (
             <TouchableOpacity
               style={[styles.actionButton, styles.pendingActionButton]}
               onPress={() => {
@@ -565,14 +953,21 @@ const BookCatalogScreen = () => {
               style={[styles.actionButton, styles.primaryActionButton]}
               onPress={() => handleBookClick(item.id)}
             >
-              <MaterialCommunityIcons name="eye" size={16} color="#ffffff" />
-              <Text style={[styles.actionButtonText, styles.primaryActionButtonText]}>View Details</Text>
+              <MaterialCommunityIcons 
+                name={item.availableCopies > 0 ? "eye" : "bookmark-outline"} 
+                size={16} 
+                color="#ffffff" 
+              />
+              <Text style={[styles.actionButtonText, styles.primaryActionButtonText]}>
+                {item.availableCopies > 0 ? 'View Details' : 'Reserve Book'}
+              </Text>
             </TouchableOpacity>
           );
         })()}
       </View>
     </View>
   );
+  };
 
   // Render footer (loading more)
   const renderFooter = () => {
@@ -641,6 +1036,7 @@ const BookCatalogScreen = () => {
         subtitle="Discover your next great read"
         onMenuPress={() => setSidebarVisible(true)}
       />
+      
 
       {/* Sidebar */}
       <Sidebar 
@@ -954,6 +1350,24 @@ const BookCatalogScreen = () => {
         }}
         book={selectedBook}
         onSuccess={handleBorrowRequestSuccess}
+        onAlreadyBorrowed={() => {
+          // Navigate to My Books or simply notify
+          Alert.alert('Already Borrowed', 'This book is already in your borrowed list.');
+        }}
+        onDuplicateRequest={(copyId) => {
+          if (!copyId) return;
+          setPendingCopyIds(prev => {
+            if (prev.has(copyId)) return prev;
+            const next = new Set(prev);
+            next.add(copyId);
+            savePendingCopyIds(next);
+            return next;
+          });
+          Alert.alert('Request Pending', 'You already have a pending borrow request for this book.', [
+            { text: 'View My Requests', onPress: () => router.push('/borrowing/my-requests') },
+            { text: 'OK' }
+          ]);
+        }}
       />
     </View>
   );
@@ -1459,6 +1873,17 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontWeight: '500',
   },
+  borrowedPill: {
+    backgroundColor: '#16a34a',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 9999
+  },
+  borrowedPillText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700'
+  },
   footer: {
     padding: 20,
     alignItems: 'center'
@@ -1683,6 +2108,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#f59e0b',
     borderColor: '#f59e0b',
   },
+  borrowedActionButton: {
+    backgroundColor: '#16a34a',
+    borderColor: '#16a34a',
+  },
   actionButtonText: {
     fontSize: 14,
     fontWeight: '600',
@@ -1693,6 +2122,9 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   pendingActionButtonText: {
+    color: '#ffffff',
+  },
+  borrowedActionButtonText: {
     color: '#ffffff',
   },
 });

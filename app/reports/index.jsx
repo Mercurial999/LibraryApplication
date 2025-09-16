@@ -27,7 +27,7 @@ const ReportsScreen = () => {
         const currentUser = await ApiService.getCurrentUser();
         const [resp, reportsRes] = await Promise.all([
           ApiService.getUserBooks(null, { status: 'borrowed', includeHistory: false }),
-          ApiService.listLostDamagedReports({ userId: String(currentUser?.id || ''), status: 'all' }).catch(() => ({ data: [] }))
+          ApiService.getLostDamagedReports('all').catch(() => ({ data: [] }))
         ]);
         // Some implementations return envelope at resp.data; others direct array
         const items = resp?.data?.borrowedBooks || resp?.data?.books || resp?.data || [];
@@ -65,7 +65,7 @@ const ReportsScreen = () => {
       try {
         const currentUser = await ApiService.getCurrentUser();
         const uid = String(currentUser?.id || '');
-        const res = await ApiService.listLostDamagedReports({ userId: uid, status: 'all' }).catch(() => ({ success: false, data: [] }));
+        const res = await ApiService.getLostDamagedReports('all').catch(() => ({ success: false, data: [] }));
         const rows = Array.isArray(res)
           ? res
           : (Array.isArray(res?.data) ? res.data : (res?.data?.reports || res?.reports || []));
@@ -192,19 +192,33 @@ const ReportsScreen = () => {
             const copyNumber = r.bookCopyNumber || r.copyNumber || r.copy_number || '';
             
             // Get status display info with enhanced status mapping
-            const getStatusDisplay = (status, resolutionType, reportType) => {
+            const getStatusDisplay = (status, resolutionType, reportType, report) => {
               switch (status) {
                 case 'PENDING':
                   return { text: 'Under Review', color: '#FFA500', icon: 'clock-outline' };
+                case 'ON_PROCESS':
+                  return { text: 'Processing Payment', color: '#3B82F6', icon: 'clock-outline' };
                 case 'PROCESSED':
                   return { text: 'Processed', color: '#6B7280', icon: 'cog-outline' };
                 case 'RESOLVED':
-                  if (resolutionType === 'FINE_PAID') {
-                    return { text: 'Fine Paid', color: '#28A745', icon: 'check-circle' };
-                  } else if (resolutionType === 'WAIVED') {
-                    return { text: 'Fine Waived', color: '#17A2B8', icon: 'information' };
+                  // Only show "Fine Paid" if there's a resolution date and librarian processed it
+                  if (report.resolutionDate && report.librarianName) {
+                    if (resolutionType === 'FINE_PAID_COMPLETE') {
+                      return { text: 'Fine Paid Complete', color: '#28A745', icon: 'check-circle' };
+                    } else if (resolutionType === 'FINE_PAID') {
+                      return { text: 'Fine Paid', color: '#28A745', icon: 'check-circle' };
+                    } else if (resolutionType === 'REPLACEMENT') {
+                      return { text: 'Replacement Required', color: '#17A2B8', icon: 'book-plus' };
+                    } else if (resolutionType === 'WAIVED') {
+                      return { text: 'Fine Waived', color: '#17A2B8', icon: 'information' };
+                    } else if (resolutionType === 'PARTIAL_PAYMENT') {
+                      return { text: 'Partial Payment', color: '#F59E0B', icon: 'currency-usd' };
+                    }
+                    return { text: 'Resolved', color: '#28A745', icon: 'check-circle' };
+                  } else {
+                    // If RESOLVED but no resolution date or librarian, treat as ON_PROCESS
+                    return { text: 'Processing Payment', color: '#3B82F6', icon: 'clock-outline' };
                   }
-                  return { text: 'Resolved', color: '#28A745', icon: 'check-circle' };
                 case 'RETURNED_LOST':
                   return { text: 'Returned (Marked as Lost)', color: '#DC2626', icon: 'book-off' };
                 case 'RETURNED_DAMAGED':
@@ -218,7 +232,7 @@ const ReportsScreen = () => {
               }
             };
             
-            const statusDisplay = getStatusDisplay(status, r.resolutionType, reportType);
+            const statusDisplay = getStatusDisplay(status, r.resolutionType, reportType, r);
             
             return (
               <View key={r.id} style={styles.reportCard}>

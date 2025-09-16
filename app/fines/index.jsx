@@ -1,10 +1,11 @@
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Header from '../../components/Header';
 import Sidebar from '../../components/Sidebar';
 import ApiService from '../../services/ApiService';
+import { formatPeso } from '../../utils/CurrencyUtils';
 
 const FinesScreen = () => {
   const [sidebarVisible, setSidebarVisible] = useState(false);
@@ -23,15 +24,80 @@ const FinesScreen = () => {
     try {
       setError(null);
       
-      // Fetch both fines and overdue transactions
-      const [finesResponse, overdueResponse] = await Promise.all([
+      // Get current user ID
+      const userId = await ApiService.getCurrentUserId();
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      // Fetch fines, overdue transactions, lost/damaged reports, and user profile
+      const [finesResponse, overdueResponse, reportsResponse, profileResponse] = await Promise.all([
         ApiService.getFines(),
-        ApiService.getOverdueTransactions()
+        ApiService.getOverdueTransactions(),
+        ApiService.getLostDamagedReports('all'),
+        ApiService.getUserProfile()
       ]);
+
+      // Also try direct API calls to ensure we get the correct data
+      let directReportsResponse = null;
+      let directFinesResponse = null;
+      
+      try {
+        // Direct call to lost/damaged reports
+        const directReportsUrl = `${ApiService.API_BASE}/api/lost-damaged-reports?userId=${userId}`;
+        console.log('🌐 Trying direct lost/damaged reports API:', directReportsUrl);
+        
+        const directReportsRes = await fetch(directReportsUrl, {
+          headers: await ApiService.getAuthHeaders(),
+        });
+        
+        if (directReportsRes.ok) {
+          directReportsResponse = await directReportsRes.json();
+          console.log('📋 Direct reports API response:', directReportsResponse);
+        } else {
+          console.log('⚠️ Direct reports API failed with status:', directReportsRes.status);
+        }
+      } catch (directErr) {
+        console.log('⚠️ Direct reports API error:', directErr.message);
+      }
+
+      try {
+        // Direct call to fines
+        const directFinesUrl = `${ApiService.API_BASE}/api/fines?userId=${userId}&status=UNPAID`;
+        console.log('🌐 Trying direct fines API:', directFinesUrl);
+        
+        const directFinesRes = await fetch(directFinesUrl, {
+          headers: await ApiService.getAuthHeaders(),
+        });
+        
+        if (directFinesRes.ok) {
+          directFinesResponse = await directFinesRes.json();
+          console.log('📋 Direct fines API response:', directFinesResponse);
+        } else {
+          console.log('⚠️ Direct fines API failed with status:', directFinesRes.status);
+        }
+      } catch (directErr) {
+        console.log('⚠️ Direct fines API error:', directErr.message);
+      }
       
       // Extract data from responses
-      const fines = finesResponse.data || finesResponse || [];
+      const fines = directFinesResponse || finesResponse.data || finesResponse || [];
       const overdueTransactions = overdueResponse.data || overdueResponse || [];
+      const reports = directReportsResponse || reportsResponse.data || reportsResponse || [];
+      const profileData = profileResponse.data || profileResponse || {};
+      
+      console.log('📊 Fines data loaded:', {
+        fines: fines,
+        overdueTransactions: overdueTransactions,
+        reports: reports,
+        profileData: profileData,
+        directReportsUsed: !!directReportsResponse,
+        directFinesUsed: !!directFinesResponse
+      });
+      
+      // Get total fines from profile as fallback
+      const profileTotalFines = profileData.statistics?.totalFines || 0;
+      console.log('💰 Profile total fines:', profileTotalFines);
       
       // Calculate totals
       const unpaidFines = fines.filter(fine => fine.status === 'UNPAID');
@@ -46,18 +112,72 @@ const FinesScreen = () => {
         return sum + (daysOverdue * (transaction.dailyFineRate || 5)); // Default ₱5 per day after 3-day grace
       }, 0);
       
+      // Calculate lost/damaged report fines
+      console.log('📋 Processing reports for fines:', reports);
+      
+      const reportFines = reports
+        .filter(report => {
+          const fineAmount = report.fineAmount || 0;
+          const status = String(report.status || 'PENDING').toUpperCase();
+          const resolutionType = String(report.resolutionType || '').toUpperCase();
+          
+          console.log('📄 Report fine check:', {
+            bookTitle: report.bookTitle,
+            fineAmount,
+            status,
+            resolutionType,
+            resolutionDate: report.resolutionDate,
+            librarianName: report.librarianName
+          });
+          
+          // Include reports with fines that are not fully resolved
+          return fineAmount > 0 && (
+            status === 'PENDING' || 
+            status === 'ON_PROCESS' || 
+            (status === 'RESOLVED' && (!report.resolutionDate || !report.librarianName))
+          );
+        })
+        .reduce((sum, report) => {
+          const fineAmount = report.fineAmount || 0;
+          console.log('💰 Adding fine amount:', fineAmount, 'for book:', report.bookTitle);
+          return sum + fineAmount;
+        }, 0);
+      
+      console.log('💰 Total report fines calculated:', reportFines);
+      
+      // Use profile total fines as fallback if calculated fines are 0
+      const finalTotalOutstanding = (totalOutstanding + overdueAmount + reportFines) || profileTotalFines;
+      
+      console.log('💰 Final calculation:', {
+        calculatedFines: totalOutstanding + overdueAmount + reportFines,
+        profileFines: profileTotalFines,
+        finalTotal: finalTotalOutstanding
+      });
+      
+      // Calculate actual unpaid count based on real unpaid items
+      const actualUnpaidCount = unpaidFines.length + 
+        (overdueTransactions.filter(t => {
+          const daysOverdue = Math.max(0, Math.floor((new Date() - new Date(t.dueDate)) / (1000 * 60 * 60 * 24)) - 3);
+          return daysOverdue > 0;
+        }).length) +
+        (reports.filter(r => r.status !== 'PAID' && r.status !== 'RESOLVED').length);
+      
       setFinesData({
-        totalOutstanding: totalOutstanding + overdueAmount,
-        unpaidCount: unpaidFines.length + (overdueAmount > 0 ? 1 : 0),
+        totalOutstanding: finalTotalOutstanding,
+        unpaidCount: actualUnpaidCount,
         paidCount: paidFines.length,
-        totalFines: fines.length + (overdueAmount > 0 ? 1 : 0),
+        totalFines: fines.length + overdueTransactions.length + reports.length,
         overdueTransactions: overdueTransactions,
-        overdueAmount: overdueAmount
+        overdueAmount: overdueAmount,
+        reportFines: reportFines,
+        reports: reports,
+        profileTotalFines: profileTotalFines
       });
     } catch (err) {
       console.error('Error loading fines data:', err);
+      console.error('Full error details:', err);
       setError(err.message);
-      Alert.alert('Error', 'Failed to load fines data. Please try again.');
+      Alert.alert('Error', `Failed to load fines data: ${err.message}`);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -67,6 +187,13 @@ const FinesScreen = () => {
   useEffect(() => {
     loadFinesData();
   }, []);
+
+  // Refresh data when screen comes into focus (e.g., returning from payment)
+  useFocusEffect(
+    useCallback(() => {
+      loadFinesData();
+    }, [])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -121,7 +248,7 @@ const FinesScreen = () => {
                 <Text style={styles.summaryTitle}>Total Outstanding</Text>
               </View>
               <View style={styles.summaryContent}>
-                <Text style={styles.totalAmount}>₱{finesData.totalOutstanding.toFixed(2)}</Text>
+                <Text style={styles.totalAmount}>{formatPeso(finesData.totalOutstanding)}</Text>
                 <Text style={styles.summarySubtext}>
                 {finesData.unpaidCount} {finesData.unpaidCount === 1 ? 'fine' : 'fines'} unpaid
               </Text>
@@ -238,7 +365,7 @@ const FinesScreen = () => {
                           <View style={styles.detailItem}>
                             <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
                             <Text style={[styles.detailText, { color: '#dc2626' }]}>
-                            Fine: ₱{fineAmount.toFixed(2)}
+                            Fine: {formatPeso(fineAmount)}
                           </Text>
                           </View>
                         )}
@@ -246,6 +373,114 @@ const FinesScreen = () => {
                     </View>
                   );
                 })}
+              </View>
+            )}
+
+            {/* Lost/Damaged Report Fines Section */}
+            {finesData.reportFines > 0 && (
+              <View style={styles.overdueSection}>
+                <View style={styles.sectionHeader}>
+                  <MaterialCommunityIcons name="book-off" size={20} color="#dc2626" />
+                  <Text style={styles.sectionTitle}>Lost/Damaged Book Fines</Text>
+                </View>
+                <Text style={styles.sectionSubtitle}>
+                  Fines for books reported as lost or damaged
+                </Text>
+                
+                {finesData.reports
+                  .filter(report => {
+                    const fineAmount = report.fineAmount || 0;
+                    const status = String(report.status || 'PENDING').toUpperCase();
+                    return fineAmount > 0 && (
+                      status === 'PENDING' || 
+                      status === 'ON_PROCESS' || 
+                      (status === 'RESOLVED' && (!report.resolutionDate || !report.librarianName))
+                    );
+                  })
+                  .map((report, index) => {
+                    const status = String(report.status || 'PENDING').toUpperCase();
+                    const resolutionType = String(report.resolutionType || '').toUpperCase();
+                    
+                    // Get status display info
+                    const getStatusDisplay = (status, resolutionType, report) => {
+                      switch (status) {
+                        case 'PENDING':
+                          return { text: 'Under Review', color: '#FFA500' };
+                        case 'ON_PROCESS':
+                          return { text: 'Processing Payment', color: '#3B82F6' };
+                        case 'RESOLVED':
+                          if (report.resolutionDate && report.librarianName) {
+                            if (resolutionType === 'FINE_PAID_COMPLETE') {
+                              return { text: 'Fine Paid Complete', color: '#28A745' };
+                            } else if (resolutionType === 'FINE_PAID') {
+                              return { text: 'Fine Paid', color: '#28A745' };
+                            } else if (resolutionType === 'REPLACEMENT') {
+                              return { text: 'Replacement Required', color: '#17A2B8' };
+                            } else if (resolutionType === 'WAIVED') {
+                              return { text: 'Fine Waived', color: '#17A2B8' };
+                            } else if (resolutionType === 'PARTIAL_PAYMENT') {
+                              return { text: 'Partial Payment', color: '#F59E0B' };
+                            }
+                            return { text: 'Resolved', color: '#28A745' };
+                          } else {
+                            return { text: 'Processing Payment', color: '#3B82F6' };
+                          }
+                        case 'CANCELLED':
+                          return { text: 'Report Cancelled', color: '#6B7280' };
+                        default:
+                          return { text: 'Reported as ' + (report.reportType || 'LOST'), color: '#DC2626' };
+                      }
+                    };
+                    
+                    const statusDisplay = getStatusDisplay(status, resolutionType, report);
+                    
+                    return (
+                      <View key={report.id || index} style={styles.overdueCard}>
+                        <View style={styles.bookHeader}>
+                          <View style={styles.bookInfo}>
+                            <Text style={styles.bookTitle} numberOfLines={2}>
+                              {report.bookTitle || 'Unknown Book'}
+                            </Text>
+                            <Text style={styles.bookAuthor}>
+                              by {report.bookAuthor || 'Unknown Author'}
+                            </Text>
+                          </View>
+                          <View style={[styles.statusBadge, { backgroundColor: statusDisplay.color }]}>
+                            <Text style={styles.statusText}>{statusDisplay.text}</Text>
+                          </View>
+                        </View>
+                        
+                        <View style={styles.overdueDetails}>
+                          <View style={styles.detailItem}>
+                            <MaterialCommunityIcons name="book-off" size={16} color="#64748b" />
+                            <Text style={styles.detailText}>
+                              {report.reportType === 'LOST' ? 'Lost' : 'Damaged'} Book
+                            </Text>
+                          </View>
+                          <View style={styles.detailItem}>
+                            <MaterialCommunityIcons name="calendar" size={16} color="#64748b" />
+                            <Text style={styles.detailText}>
+                              Reported: {new Date(report.reportDate).toLocaleDateString()}
+                            </Text>
+                          </View>
+                          <View style={styles.detailItem}>
+                            <MaterialCommunityIcons name="currency-usd" size={16} color="#dc2626" />
+                            <Text style={[styles.detailText, { color: '#dc2626' }]}>
+                              Fine: {formatPeso(report.fineAmount || 0)}
+                            </Text>
+                          </View>
+                          {report.description && (
+                            <View style={styles.detailItem}>
+                              <MaterialCommunityIcons name="text" size={16} color="#64748b" />
+                              <Text style={styles.detailText} numberOfLines={2}>
+                                {report.description}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
               </View>
             )}
 

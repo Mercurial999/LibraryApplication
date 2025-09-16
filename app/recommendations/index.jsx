@@ -370,10 +370,18 @@ const RecommendationsScreen = () => {
             <Text style={styles.emptyStateText}>No recommendations found</Text>
             <Text style={styles.emptyStateSubtext}>
               {recommendations.length === 0 
-                ? "Start borrowing books to get personalized recommendations based on your reading patterns."
+                ? "Start borrowing or reserving books to get personalized recommendations based on your reading patterns."
                 : "Try adjusting your filters to see more recommendations."
               }
             </Text>
+            {analysis.userHistoryCount === 0 && (
+              <View style={styles.newUserTip}>
+                <MaterialCommunityIcons name="lightbulb-outline" size={20} color="#3b82f6" />
+                <Text style={styles.newUserTipText}>
+                  As a new user, explore our book catalog to discover books you might enjoy!
+                </Text>
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -704,6 +712,23 @@ const styles = StyleSheet.create({
     color: '#64748b',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  newUserTip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 16,
+    borderLeftWidth: 3,
+    borderLeftColor: '#3b82f6',
+  },
+  newUserTipText: {
+    fontSize: 12,
+    color: '#1e40af',
+    marginLeft: 8,
+    flex: 1,
+    fontWeight: '500',
   },
 });
 
